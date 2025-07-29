@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 
 import numpy as np
-from numpy.typing import ArrayLike
+from numpy.typing import ArrayLike, NDArray
 import matplotlib.pyplot as plt
 
 from . import Trainer
@@ -12,10 +12,10 @@ class TestDataset:
     N: int = 100
     K: int = 3
     D_per: int = 10
+    B_k: NDArray = field(default_factory=lambda: np.array([2.0, -1.0, 1.])) #*4
     X: ArrayLike = field(init=False)
     Y: ArrayLike = field(init=False)
     Y_std: ArrayLike = field(init=False)
-    B_k: ArrayLike = field(init=False)
 
     def __post_init__(self):
         self.D = self.D_per * self.K
@@ -35,7 +35,6 @@ class TestDataset:
         self.X = np.random.normal(X_k@M, .1)
         self.X = (self.X-self.X.mean(0)) / self.X.std(0)
         
-        self.B_k = np.array([2.0, -1.0, 1.]) #*4
         # B_k = np.array([6., 6., 6.])
         B = self.B_k.repeat((self.D_per,))
         #Y = X[:, [i*D_per+3 for i in range(K)]] @ B_k

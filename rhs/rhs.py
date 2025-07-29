@@ -1,32 +1,40 @@
-from collections import OrderedDict
+import re
+import dataclasses
+from dataclasses import dataclass, field
 
 import dill
 import numpyro
 import numpyro.distributions as dist
-from numpyro.primitives import Message
 from numpyro import handlers
+from numpyro.infer.svi import SVIState
 import jax.numpy as jnp
 from jax import random
 from jax.typing import ArrayLike
 import optax
+import dacite
 
 from .dist import *
+from .common import TraceType
 from .model import Configuration, to_reg_lambda
 
-type TraceType = OrderedDict[str, Message]
 
-            
+@dataclass
 class Trainer:
-    def __init__(self, conf: Configuration, seed: int = 0):
-        self.conf = conf
-        self.key = random.key(seed)
-        self.optim = optax.adam(0.01)
-        self.elbo = numpyro.infer.Trace_ELBO(10)
+    conf: Configuration
+    key: ArrayLike = field(default_factory=lambda: random.key(0))
+    optim: optax.GradientTransformation = optax.adam(0.01)
+    elbo: numpyro.infer.ELBO = numpyro.infer.Trace_ELBO(10)
+    svi_state: SVIState | None = None
+    losses: list[float] = field(default_factory=list)
+    
+    def __post_init__(self):
         self.svi = numpyro.infer.SVI(self.conf.model, self.conf.guide,
                                      self.optim, loss=self.elbo)
-        self.svi_state = self.svi.init(self.subkey(), init_params=self.conf.inits)
+        if self.svi_state is None:
+            self.svi_state = self.svi.init(self.subkey(), init_params=self.conf.inits)
+        else:
+            self.svi.init(random.key(0)) # build svi.constrain_fn
         self.gather()
-        self.losses = []
 
     def subkey(self):
         self.key, subkey = random.split(self.key)
@@ -66,7 +74,7 @@ class Trainer:
     def posterior(self, site: str) -> dist.Distribution:
         conf = self.conf
         trace = self.trace_guide()
-        
+
         match site:
             case 'c':
                 c2_aux = self.posterior('c2_aux')
@@ -79,6 +87,10 @@ class Trainer:
                 rhs_scale = tau * lambda_reg
                 coef_dec = self.posterior('coef_dec')
                 return dist.Normal(coef_dec.loc * rhs_scale, coef_dec.scale * rhs_scale)
+            case _ if self.conf.reparam and (match := re.match(r'^(tau|lambda)', site)):
+                name = match[0]
+                scale = self.conf.tau_scale if name == 'tau' else 1.
+                return self.conf.reparam.posterior(trace, site, name, scale)
             case _:
                 return trace[site]['fn']
         
@@ -100,11 +112,17 @@ class Trainer:
         finally:
             self.gather()
 
+    def sample_posterior(self, num_samples=300, seed=0):
+        pred = numpyro.infer.Predictive(
+            self.conf.guide, params=self.params, num_samples=num_samples)
+        return pred(random.key(seed))
+
     def save(self, path):
         with open(path, 'wb') as f:
-            dill.dump(self, f)
+            dill.dump(dataclasses.asdict(self), f)
 
-    @staticmethod
-    def load(path):
+    @classmethod
+    def load(cls, path):
         with open(path, 'rb') as f:
-            return dill.load(f)
+            data = dill.load(f)
+            return dacite.from_dict(data_class=cls, data=data)

@@ -8,23 +8,10 @@ from numpyro import handlers
 import jax.numpy as jnp
 from jax.typing import ArrayLike
 
-"""
-reparam:
- - base
- - invg-invg
-   - cen
-   - dec1
-   - dec2
-   - dec
- - g-g
-   - cen
-   - dec
-guide:
-  - factorized
-  - mvn
-  - mxn
-"""
+from .common import TraceType
 
+
+# * Utils
 exp_transform = dist.transforms.ExpTransform()
 pos_const = dist.constraints.softplus_positive
 
@@ -39,11 +26,162 @@ def lognormal_site(name, loc_init=0., scale_init=.1) -> ArrayLike:
 def to_reg_lambda(tau2, lambda2, c2):
     return jnp.sqrt(lambda2 * c2 / (c2 + tau2 * lambda2))
 
+# * Reparam
+
+# ** InverseGamma - InverseGamma
+@dataclass
+class ReparamII:
+    dec1: bool
+    dec2: bool
+
+    def model(self, name: str, scale) -> ArrayLike:
+        match self.dec1, self.dec2:
+            case False, False:
+                aux1 = numpyro.sample(f'{name}_aux1', dist.InverseGamma(0.5, 1. / (scale*scale)))
+                aux2 = numpyro.sample(f'{name}_aux2', dist.InverseGamma(0.5, 1./aux1))
+                return numpyro.deterministic(name, jnp.sqrt(aux2))
+            case True, False:
+                aux1_dec = numpyro.sample(f'{name}_aux1_dec', dist.InverseGamma(0.5, 1.))
+                aux1 = numpyro.deterministic(f'{name}_aux1', aux1_dec / (scale*scale))
+                aux2 = numpyro.sample(f'{name}_aux2', dist.InverseGamma(0.5, 1./aux1))
+                return numpyro.deterministic(name, jnp.sqrt(aux2))
+            case False, True:
+                aux1 = numpyro.sample(f'{name}_aux1', dist.InverseGamma(0.5, 1. / (scale*scale)))
+                aux2_dec = numpyro.sample(f'{name}_aux2_dec', dist.InverseGamma(0.5, 1.))
+                aux2 = numpyro.deterministic(f'{name}_aux2', aux2_dec/aux1)
+                return numpyro.deterministic(name, jnp.sqrt(aux2))
+            case True, True:
+                aux1_dec = numpyro.sample(f'{name}_aux1_dec', dist.InverseGamma(0.5, 1.))
+                aux2_dec = numpyro.sample(f'{name}_aux2_dec', dist.InverseGamma(0.5, 1.))
+                return numpyro.deterministic(name, scale * jnp.sqrt(aux2_dec / aux1_dec))
+
+    def guide(self, name: str, scale) -> ArrayLike:
+        aux1n = f'{name}_aux1'
+        aux2n = f'{name}_aux2'
+
+        if self.dec1:
+            aux1_dec = lognormal_site(f'{aux1n}_dec')
+            aux1 = numpyro.deterministic(aux1n, aux1_dec / (scale*scale))
+        else:
+            aux1 = lognormal_site(aux1n)
+
+        if self.dec2:
+            aux2_dec = lognormal_site(f'{aux2n}_dec')
+            aux2 = numpyro.deterministic(aux2n, aux2_dec / aux1)
+        else:
+            aux2 = lognormal_site(aux2n)
+        
+        return numpyro.deterministic(name, jnp.sqrt(aux2))
+
+    def posterior(self, trace: TraceType, site: str, name: str, scale) -> dist.Distribution:
+        """
+        Param `name` is the name of the half-cauchy prior site.
+        Param `site` is the name of the site of the requested posterior.
+        """
+        if site.endswith('aux1') and self.dec1:
+            dec = trace[f'{site}_dec']['fn']
+            # s = jnp.log(1. / (self.scale*self.scale))
+            s = -2 * jnp.log(scale)
+            return dist.LogNormal(dec.loc + s, dec.scale)
+        elif site.endswith('aux2') and self.dec2:
+            ## aux2_dec / aux1
+            # 1. Uses mean instead of dividing the two logs
+            """
+            aux1 = self.posterior(trace, f'{name}_aux1', name, scale)
+            dec = t[f'{name}_aux2_dec']['fn']
+            s = 1. / aux1.mean
+            return LogNormal(dec.loc + jnp.log(s), dec.scale)
+            """
+            # 2. Divide two lognormals using aux1
+            # """
+            aux1 = self.posterior(trace, f'{name}_aux1', name, scale)
+            dec = trace[f'{name}_aux2_dec']['fn']
+            return dist.LogNormal(dec.loc - aux1.loc, jnp.hypot(dec.scale, aux1.scale))
+            # """
+        elif site == name:
+            # 1. Indirectly
+            d = self.posterior(trace, f'{name}_aux2', name, scale)
+            return dist.LogNormal(0.5*d.loc, jnp.sqrt(0.25 * d.scale**2))
+
+            # 2. Directly
+            """
+            aux1_dec = trace[f'{name}_aux1_dec']['fn']
+            aux2_dec = trace[f'{name}_aux2_dec']['fn']
+            loc = jnp.log(scale) + (aux2_dec.loc - aux1_dec.loc) / 2
+            scale = 0.5 * jnp.hypot(aux1_dec.scale, aux2_dec.scale)
+            return dist.LogNormal(loc, scale)
+            """
+        else:
+            return trace[site]['fn']
+
+    
+# ** InverseGamma - Gamma
+
+def lognormal_from_sqrtmul(aux1_loc, aux1_scale, aux2_loc, aux2_scale, reparam_scale=None):
+    """
+    If aux1 ~ LN() and aux2 ~ LN(), returns loc and scale of sqrt(aux1*aux2) ~ LN().x
+    """
+    if reparam_scale is not None:
+        aux2_loc += jnp.log(reparam_scale*reparam_scale)
+    loc = .5 * (aux1_loc + aux2_loc)
+    # ``jnp.hypot`` is a more numerically stable way of computing
+    # ``jnp.sqrt(x1 ** 2 + x2 **2)``.
+    # scale = .5 * jnp.sqrt(aux1_scale**2 + aux2_scale**2)
+    scale = .5 * jnp.hypot(aux1_scale, aux2_scale)
+    return loc, scale
+
+@dataclass
+class ReparamIG:
+    dec: bool
+
+    def model(self, name: str, scale) -> ArrayLike:
+        if self.dec:
+            aux1 = numpyro.sample(f'{name}_aux1', dist.InverseGamma(0.5, 1.))
+            aux2_dec = numpyro.sample(f'{name}_aux2_dec', dist.Gamma(0.5, 1.)) 
+            aux2 = numpyro.deterministic(f'{name}_aux2', aux2_dec * scale * scale)
+            return numpyro.deterministic(name, jnp.sqrt(aux1 * aux2_dec) * scale)
+        else:
+            aux1 = numpyro.sample(f'{name}_aux1', dist.InverseGamma(0.5, 1.))
+            aux2 = numpyro.sample(f'{name}_aux2', dist.Gamma(0.5, 1./(scale*scale)))
+            return numpyro.deterministic(name, jnp.sqrt(aux1 * aux2))
+
+    def guide(self, name: str, scale) -> ArrayLike:
+        aux1 = lognormal_site(f'{name}_aux1')
+
+        if self.dec:
+            aux2_dec = lognormal_site(f'{name}_aux2_dec')
+            aux2 = numpyro.deterministic(f'{name}_aux2', aux2_dec * scale * scale)
+            return numpyro.deterministic(name, jnp.sqrt(aux1 * aux2_dec) * scale)
+
+        else:
+            aux2 = lognormal_site(f'{name}_aux2')
+            return numpyro.deterministic(name, jnp.sqrt(aux1 * aux2))
+
+    def posterior(self, trace: TraceType, site: str, name: str, scale) -> dist.Distribution:
+        """
+        Param `name` is the name of the half-cauchy prior site.
+        Param `site` is the name of the site of the requested posterior.
+        """
+        if site.endswith('aux2') and self.dec:
+            dec = trace[f'{site}_dec']['fn']
+            return dist.LogNormal(dec.loc + jnp.log(scale*scale), dec.scale)
+        elif site == name:
+            aux1 = self.posterior(trace, f'{name}_aux1', name, scale)
+            aux2 = self.posterior(trace, f'{name}_aux2', name, scale)
+            loc, scale = lognormal_from_sqrtmul(aux1.loc, aux1.scale, aux2.loc, aux2.scale)
+            return dist.LogNormal(loc, scale)
+        else:
+            return trace[site]['fn']
+
+# * Config
+            
+Reparam = None | ReparamII | ReparamIG
 
 @dataclass
 class Configuration:
     X: ArrayLike
     Y: ArrayLike
+    reparam: Reparam
     tau_scale: float
     c_df: float
     c_scale: float
@@ -62,9 +200,17 @@ class Configuration:
             c2_aux = numpyro.sample('c2_aux', dist.InverseGamma(self.c_df*0.5, self.c_df*0.5))
             c = self.c_scale * jnp.sqrt(c2_aux)
 
-            tau = numpyro.sample('tau', dist.HalfCauchy(scale=self.tau_scale))
+            if self.reparam is None:
+                tau = numpyro.sample('tau', dist.HalfCauchy(scale=self.tau_scale))
+            else:
+                tau = self.reparam.model('tau', self.tau_scale)
+
             with numpyro.plate('d', self.D):
-                lambda_ = numpyro.sample('lambda', dist.HalfCauchy(scale=1.))
+                if self.reparam is None:
+                    lambda_ = numpyro.sample('lambda', dist.HalfCauchy(scale=1.))
+                else:
+                    lambda_ = self.reparam.model('lambda', 1.)
+                    
                 lambda_reg = to_reg_lambda(tau**2, lambda_**2, c*c)
                 
                 coef_dec = numpyro.sample('coef_dec', dist.Normal(0., 1.))
@@ -78,17 +224,29 @@ class Configuration:
         # Guide
         def guide():
             lognormal_site('noise')
-            lognormal_site('c2_aux')
-            lognormal_site('tau')
+            c2_aux = lognormal_site('c2_aux')
+            c = self.c_scale * jnp.sqrt(c2_aux)
+
+            if self.reparam:
+                tau = self.reparam.guide('tau', self.tau_scale)
+            else:
+                tau = lognormal_site('tau')
                 
             with numpyro.plate('d', self.D):
-                lognormal_site('lambda')
+                if self.reparam:
+                    lambda_ = self.reparam.guide('lambda', 1.)
+                else:
+                    lambda_ = lognormal_site('lambda')
                         
+                lambda_reg = to_reg_lambda(tau**2, lambda_**2, c*c)
+
                 coef_loc = numpyro.param('locs.coef', self.inits['locs.coef_dec'])
                 coef_scale = numpyro.param('scales.coef_dec',
                                            self.inits['scales.coef_dec'],
               	                       constraint=pos_const)
-                numpyro.sample('coef_dec', dist.Normal(coef_loc, coef_scale))
+                coef_dec = numpyro.sample('coef_dec', dist.Normal(coef_loc, coef_scale))
+                coef = numpyro.deterministic('coef', coef_dec * tau * lambda_reg)
+
         self.guide = guide
 
         # Populate init values
