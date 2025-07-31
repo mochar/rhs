@@ -35,25 +35,42 @@ class ReparamII:
     dec2: bool
 
     def model(self, name: str, scale) -> ArrayLike:
-        match self.dec1, self.dec2:
-            case False, False:
-                aux1 = numpyro.sample(f'{name}_aux1', dist.InverseGamma(0.5, 1. / (scale*scale)))
-                aux2 = numpyro.sample(f'{name}_aux2', dist.InverseGamma(0.5, 1./aux1))
-                return numpyro.deterministic(name, jnp.sqrt(aux2))
-            case True, False:
-                aux1_dec = numpyro.sample(f'{name}_aux1_dec', dist.InverseGamma(0.5, 1.))
-                aux1 = numpyro.deterministic(f'{name}_aux1', aux1_dec / (scale*scale))
-                aux2 = numpyro.sample(f'{name}_aux2', dist.InverseGamma(0.5, 1./aux1))
-                return numpyro.deterministic(name, jnp.sqrt(aux2))
-            case False, True:
-                aux1 = numpyro.sample(f'{name}_aux1', dist.InverseGamma(0.5, 1. / (scale*scale)))
-                aux2_dec = numpyro.sample(f'{name}_aux2_dec', dist.InverseGamma(0.5, 1.))
-                aux2 = numpyro.deterministic(f'{name}_aux2', aux2_dec/aux1)
-                return numpyro.deterministic(name, jnp.sqrt(aux2))
-            case True, True:
-                aux1_dec = numpyro.sample(f'{name}_aux1_dec', dist.InverseGamma(0.5, 1.))
-                aux2_dec = numpyro.sample(f'{name}_aux2_dec', dist.InverseGamma(0.5, 1.))
-                return numpyro.deterministic(name, scale * jnp.sqrt(aux2_dec / aux1_dec))
+        if self.dec1:
+            aux1_dec = numpyro.sample(f'{name}_aux1_dec', dist.InverseGamma(0.5, 1.))
+            aux1 = numpyro.deterministic(f'{name}_aux1', aux1_dec / (scale*scale))
+        else:
+            aux1 = numpyro.sample(f'{name}_aux1', dist.InverseGamma(0.5, 1. / (scale*scale)))
+
+        if self.dec2:
+            aux2_dec = numpyro.sample(f'{name}_aux2_dec', dist.InverseGamma(0.5, 1.))
+            aux2 = numpyro.deterministic(f'{name}_aux2', aux2_dec/aux1)
+        else:
+            aux2 = numpyro.sample(f'{name}_aux2', dist.InverseGamma(0.5, 1./aux1))
+
+        if self.dec1 and self.dec2:
+            return numpyro.deterministic(name, scale * jnp.sqrt(aux2_dec / aux1_dec))
+        else:
+            return numpyro.deterministic(name, jnp.sqrt(aux2))
+                        
+        # match self.dec1, self.dec2:
+        #     case False, False:
+        #         aux1 = numpyro.sample(f'{name}_aux1', dist.InverseGamma(0.5, 1. / (scale*scale)))
+        #         aux2 = numpyro.sample(f'{name}_aux2', dist.InverseGamma(0.5, 1./aux1))
+        #         return numpyro.deterministic(name, jnp.sqrt(aux2))
+        #     case True, False:
+        #         aux1_dec = numpyro.sample(f'{name}_aux1_dec', dist.InverseGamma(0.5, 1.))
+        #         aux1 = numpyro.deterministic(f'{name}_aux1', aux1_dec / (scale*scale))
+        #         aux2 = numpyro.sample(f'{name}_aux2', dist.InverseGamma(0.5, 1./aux1))
+        #         return numpyro.deterministic(name, jnp.sqrt(aux2))
+        #     case False, True:
+        #         aux1 = numpyro.sample(f'{name}_aux1', dist.InverseGamma(0.5, 1. / (scale*scale)))
+        #         aux2_dec = numpyro.sample(f'{name}_aux2_dec', dist.InverseGamma(0.5, 1.))
+        #         aux2 = numpyro.deterministic(f'{name}_aux2', aux2_dec/aux1)
+        #         return numpyro.deterministic(name, jnp.sqrt(aux2))
+        #     case True, True:
+        #         aux1_dec = numpyro.sample(f'{name}_aux1_dec', dist.InverseGamma(0.5, 1.))
+        #         aux2_dec = numpyro.sample(f'{name}_aux2_dec', dist.InverseGamma(0.5, 1.))
+        #         return numpyro.deterministic(name, scale * jnp.sqrt(aux2_dec / aux1_dec))
 
     def guide(self, name: str, scale) -> ArrayLike:
         aux1n = f'{name}_aux1'
@@ -182,6 +199,7 @@ class Configuration:
     X: ArrayLike
     Y: ArrayLike
     reparam: Reparam
+    coef_dec: bool
     tau_scale: float
     c_df: float
     c_scale: float
@@ -198,7 +216,7 @@ class Configuration:
         def model():
             noise = numpyro.sample('noise', dist.Exponential(1.))
             c2_aux = numpyro.sample('c2_aux', dist.InverseGamma(self.c_df*0.5, self.c_df*0.5))
-            c = self.c_scale * jnp.sqrt(c2_aux)
+            c = numpyro.deterministic('c', self.c_scale * jnp.sqrt(c2_aux))
 
             if self.reparam is None:
                 tau = numpyro.sample('tau', dist.HalfCauchy(scale=self.tau_scale))
@@ -212,10 +230,13 @@ class Configuration:
                     lambda_ = self.reparam.model('lambda', 1.)
                     
                 lambda_reg = to_reg_lambda(tau**2, lambda_**2, c*c)
-                
-                coef_dec = numpyro.sample('coef_dec', dist.Normal(0., 1.))
-                coef = numpyro.deterministic('coef', coef_dec * tau * lambda_reg)
-                
+
+                if self.coef_dec:
+                    coef_dec = numpyro.sample('coef_dec', dist.Normal(0., 1.))
+                    coef = numpyro.deterministic('coef', coef_dec * tau * lambda_reg)
+                else:
+                    coef = numpyro.sample('coef', dist.Normal(0., tau * lambda_reg))
+
             mean = self.X @ coef
             with numpyro.plate('n', self.N):
                 numpyro.sample('y', dist.Normal(mean, noise), obs=self.Y)
@@ -240,12 +261,16 @@ class Configuration:
                         
                 lambda_reg = to_reg_lambda(tau**2, lambda_**2, c*c)
 
-                coef_loc = numpyro.param('locs.coef', self.inits['locs.coef_dec'])
-                coef_scale = numpyro.param('scales.coef_dec',
-                                           self.inits['scales.coef_dec'],
+                coef_name = 'coef' + ('_dec' if self.coef_dec else '')
+                coef_loc = numpyro.param(f'locs.{coef_name}', self.inits[f'locs.{coef_name}'])
+                coef_scale = numpyro.param(f'scales.{coef_name}',
+                                           self.inits[f'scales.{coef_name}'],
               	                       constraint=pos_const)
-                coef_dec = numpyro.sample('coef_dec', dist.Normal(coef_loc, coef_scale))
-                coef = numpyro.deterministic('coef', coef_dec * tau * lambda_reg)
+                if self.coef_dec:
+                    coef_dec = numpyro.sample('coef_dec', dist.Normal(coef_loc, coef_scale))
+                    coef = numpyro.deterministic('coef', coef_dec * tau * lambda_reg)
+                else:
+                    coef = numpyro.sample('coef', dist.Normal(coef_loc, coef_scale))
 
         self.guide = guide
 

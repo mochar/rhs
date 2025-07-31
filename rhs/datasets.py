@@ -4,7 +4,7 @@ import numpy as np
 from numpy.typing import ArrayLike, NDArray
 import matplotlib.pyplot as plt
 
-from . import Trainer
+from . import TrainerSVI
 
 
 @dataclass
@@ -12,7 +12,10 @@ class TestDataset:
     N: int = 100
     K: int = 3
     D_per: int = 10
+    x_std: float = 1.0
+    correlated: bool = True
     B_k: NDArray = field(default_factory=lambda: np.array([2.0, -1.0, 1.])) #*4
+    B_k_std: NDArray = field(init=False)
     X: ArrayLike = field(init=False)
     Y: ArrayLike = field(init=False)
     Y_std: ArrayLike = field(init=False)
@@ -29,22 +32,24 @@ class TestDataset:
         #np.fill_diagonal(U, scales**2)
         #X = multivariate_normal(cov=np.kron(V, U)).rvs(N)
         #X = (X-X.mean(0)) / X.std(0)
-        
-        X_k = np.random.normal(size=(self.N, self.K))
-        M = np.eye(self.K).repeat(self.D_per, 0).T
-        self.X = np.random.normal(X_k@M, .1)
+
+        X_k = np.random.normal(size=(self.N, self.K)) * self.x_std
+        if self.correlated:
+            M = np.eye(self.K).repeat(self.D_per, 0).T
+            self.X = np.random.normal(X_k@M, .1)
+        else:
+            self.X = np.random.normal(size=(self.N, self.D)) * self.x_std
+            for k in range(self.K):
+                self.X[:, k*self.D_per] = X_k[:, k]
         self.X = (self.X-self.X.mean(0)) / self.X.std(0)
         
-        # B_k = np.array([6., 6., 6.])
-        B = self.B_k.repeat((self.D_per,))
-        #Y = X[:, [i*D_per+3 for i in range(K)]] @ B_k
         self.Y = X_k @ self.B_k
-        #Y = X @ B
         self.Y = np.random.normal(self.Y, 1.)
         self.Y_std = self.Y.std()
         self.Y = (self.Y-self.Y.mean()) / self.Y.std()
+        self.B_k_std = self.B_k/self.Y_std
 
-    def plot_coeffs(self, trainer: Trainer):
+    def plot_coeffs(self, trainer: TrainerSVI):
         coefs = trainer.estimates['coef']
         lambd = trainer.estimates['lambda']
         fig, axs = plt.subplots(nrows=2, sharex=True)

@@ -6,6 +6,8 @@ import dill
 import numpyro
 import numpyro.distributions as dist
 from numpyro import handlers
+from numpyro.infer import MCMC, HMC, NUTS
+from numpyro.infer.mcmc import MCMCKernel
 from numpyro.infer.svi import SVIState
 import jax.numpy as jnp
 from jax import random
@@ -19,9 +21,53 @@ from .model import Configuration, to_reg_lambda
 
 
 @dataclass
-class Trainer:
+class TrainerMixin:
     conf: Configuration
     key: ArrayLike = field(default_factory=lambda: random.key(0))
+
+    def subkey(self):
+        self.key, subkey = random.split(self.key)
+        return subkey
+
+    def trace_model(self, seed=0) -> TraceType:
+        return handlers.trace(handlers.seed(self.conf.model, seed)).get_trace()
+
+    def save(self, path):
+        with open(path, 'wb') as f:
+            dill.dump(dataclasses.asdict(self), f)
+
+    @classmethod
+    def load(cls, path):
+        with open(path, 'rb') as f:
+            data = dill.load(f)
+            trainer = dacite.from_dict(data_class=cls, data=data)
+            trainer.gather()
+            return trainer
+
+
+@dataclass
+class TrainerMCMC(TrainerMixin):
+    num_warmup: int = 500
+    num_samples: int = 500
+    kernel: MCMCKernel = field(init=False)
+    mcmc: MCMC = field(init=False)
+
+    def __post_init__(self):
+        # self.kernel = HMC(self.conf.model)
+        self.kernel = NUTS(self.conf.model, init_strategy=numpyro.infer.init_to_sample)
+        self.mcmc = MCMC(self.kernel, num_warmup=self.num_warmup, num_samples=self.num_samples)
+
+    def train(self):
+        self.mcmc.run(self.subkey())
+        self.gather()
+
+    def gather(self):
+        self.tracem = self.trace_model()
+        self.samples = self.mcmc.get_samples()
+        self.estimates = {site: samples.mean(0) for site, samples in self.samples.items()}
+
+@dataclass
+class TrainerSVI(TrainerMixin):
     optim: optax.GradientTransformation = optax.adam(0.01)
     elbo: numpyro.infer.ELBO = numpyro.infer.Trace_ELBO(10)
     svi_state: SVIState | None = None
@@ -35,13 +81,6 @@ class Trainer:
         else:
             self.svi.init(random.key(0)) # build svi.constrain_fn
         self.gather()
-
-    def subkey(self):
-        self.key, subkey = random.split(self.key)
-        return subkey
-
-    def trace_model(self, seed=0) -> TraceType:
-        return handlers.trace(handlers.seed(self.conf.model, seed)).get_trace()
 
     def prior(self, site: str) -> dist.Distribution:
         conf = self.conf
@@ -81,7 +120,7 @@ class Trainer:
                 loc = .5 * c2_aux.loc + jnp.log(conf.c_scale)
                 scale = .5 * c2_aux.scale
                 return dist.LogNormal(loc, scale)
-            case 'coef':
+            case 'coef' if self.conf.coef_dec:
                 tau = self.estimate('tau')
                 lambda_reg = to_reg_lambda(tau**2, self.estimate('lambda')**2, self.estimate('c')**2)
                 rhs_scale = tau * lambda_reg
@@ -116,13 +155,3 @@ class Trainer:
         pred = numpyro.infer.Predictive(
             self.conf.guide, params=self.params, num_samples=num_samples)
         return pred(random.key(seed))
-
-    def save(self, path):
-        with open(path, 'wb') as f:
-            dill.dump(dataclasses.asdict(self), f)
-
-    @classmethod
-    def load(cls, path):
-        with open(path, 'rb') as f:
-            data = dill.load(f)
-            return dacite.from_dict(data_class=cls, data=data)
