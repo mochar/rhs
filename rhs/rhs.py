@@ -64,6 +64,7 @@ class TrainerMCMC(TrainerMixin):
     def gather(self):
         self.tracem = self.trace_model()
         self.samples = self.mcmc.get_samples()
+        self.diverging = self.mcmc._states['diverging'][0]
         self.estimates = {site: samples.mean(0) for site, samples in self.samples.items()}
 
 @dataclass
