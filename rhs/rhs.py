@@ -54,11 +54,12 @@ class TrainerMCMC(TrainerMixin):
 
     def __post_init__(self):
         # self.kernel = HMC(self.conf.model)
-        self.kernel = NUTS(self.conf.model, init_strategy=numpyro.infer.init_to_sample)
+        self.kernel = NUTS(self.conf.model)
         self.mcmc = MCMC(self.kernel, num_warmup=self.num_warmup, num_samples=self.num_samples)
 
     def train(self):
-        self.mcmc.run(self.subkey())
+        init_params = {s: jnp.full_like(n['value'], .01) for s, n in self.trace_model().items() if 'value' in n and n['type'] == 'sample'}
+        self.mcmc.run(self.subkey())#, init_params=init_params)
         self.gather()
 
     def gather(self):
@@ -141,7 +142,7 @@ class TrainerSVI(TrainerMixin):
         self.estimates = {site: self.estimate(site)
                           for t in [self.traceg, self.tracem]
                           for site, node in t.items()
-                          if node['type'] in ['sample', 'deterministic'] and not node.get('is_observed', False)}
+                          if node['type'] in ['sample', 'deterministic'] and not node.get('is_observed', False) and site not in ['lambda_reg', 'c']}
             
     def train(self, steps):
         try:

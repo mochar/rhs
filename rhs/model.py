@@ -15,13 +15,17 @@ from .common import TraceType
 exp_transform = dist.transforms.ExpTransform()
 pos_const = dist.constraints.softplus_positive
 
-def lognormal_site(name, loc_init=0., scale_init=.1) -> ArrayLike:
-    loc = numpyro.param(f'locs.{name}', jnp.array(loc_init))
+def normal_site(name, inits: dict[str, Any], log: bool = False) -> ArrayLike:
+    loc = numpyro.param(f'locs.{name}', inits[f'locs.{name}'])
     scale = numpyro.param(
         f'scales.{name}',
-        jnp.array(scale_init),
+        inits[f'scales.{name}'],
         constraint=pos_const)
-    return numpyro.sample(name, dist.LogNormal(loc, scale))
+    D = dist.LogNormal if log else dist.Normal
+    return numpyro.sample(name, D(loc, scale))
+
+def lognormal_site(name, inits: dict[str, Any], log: bool = False) -> ArrayLike:
+    return normal_site(name, inits, log=True)
 
 def to_reg_lambda(tau2, lambda2, c2):
     return jnp.sqrt(lambda2 * c2 / (c2 + tau2 * lambda2))
@@ -51,42 +55,22 @@ class ReparamII:
             return numpyro.deterministic(name, scale * jnp.sqrt(aux2_dec / aux1_dec))
         else:
             return numpyro.deterministic(name, jnp.sqrt(aux2))
-                        
-        # match self.dec1, self.dec2:
-        #     case False, False:
-        #         aux1 = numpyro.sample(f'{name}_aux1', dist.InverseGamma(0.5, 1. / (scale*scale)))
-        #         aux2 = numpyro.sample(f'{name}_aux2', dist.InverseGamma(0.5, 1./aux1))
-        #         return numpyro.deterministic(name, jnp.sqrt(aux2))
-        #     case True, False:
-        #         aux1_dec = numpyro.sample(f'{name}_aux1_dec', dist.InverseGamma(0.5, 1.))
-        #         aux1 = numpyro.deterministic(f'{name}_aux1', aux1_dec / (scale*scale))
-        #         aux2 = numpyro.sample(f'{name}_aux2', dist.InverseGamma(0.5, 1./aux1))
-        #         return numpyro.deterministic(name, jnp.sqrt(aux2))
-        #     case False, True:
-        #         aux1 = numpyro.sample(f'{name}_aux1', dist.InverseGamma(0.5, 1. / (scale*scale)))
-        #         aux2_dec = numpyro.sample(f'{name}_aux2_dec', dist.InverseGamma(0.5, 1.))
-        #         aux2 = numpyro.deterministic(f'{name}_aux2', aux2_dec/aux1)
-        #         return numpyro.deterministic(name, jnp.sqrt(aux2))
-        #     case True, True:
-        #         aux1_dec = numpyro.sample(f'{name}_aux1_dec', dist.InverseGamma(0.5, 1.))
-        #         aux2_dec = numpyro.sample(f'{name}_aux2_dec', dist.InverseGamma(0.5, 1.))
-        #         return numpyro.deterministic(name, scale * jnp.sqrt(aux2_dec / aux1_dec))
 
-    def guide(self, name: str, scale) -> ArrayLike:
+    def guide(self, name: str, scale, inits: dict[str, Any]) -> ArrayLike:
         aux1n = f'{name}_aux1'
         aux2n = f'{name}_aux2'
 
         if self.dec1:
-            aux1_dec = lognormal_site(f'{aux1n}_dec')
+            aux1_dec = lognormal_site(f'{aux1n}_dec', inits)
             aux1 = numpyro.deterministic(aux1n, aux1_dec / (scale*scale))
         else:
-            aux1 = lognormal_site(aux1n)
+            aux1 = lognormal_site(aux1n, inits)
 
         if self.dec2:
-            aux2_dec = lognormal_site(f'{aux2n}_dec')
+            aux2_dec = lognormal_site(f'{aux2n}_dec', inits)
             aux2 = numpyro.deterministic(aux2n, aux2_dec / aux1)
         else:
-            aux2 = lognormal_site(aux2n)
+            aux2 = lognormal_site(aux2n, inits)
         
         return numpyro.deterministic(name, jnp.sqrt(aux2))
 
@@ -162,16 +146,16 @@ class ReparamIG:
             aux2 = numpyro.sample(f'{name}_aux2', dist.Gamma(0.5, 1./(scale*scale)))
             return numpyro.deterministic(name, jnp.sqrt(aux1 * aux2))
 
-    def guide(self, name: str, scale) -> ArrayLike:
-        aux1 = lognormal_site(f'{name}_aux1')
+    def guide(self, name: str, scale, inits: dict[str, Any]) -> ArrayLike:
+        aux1 = lognormal_site(f'{name}_aux1', inits)
 
         if self.dec:
-            aux2_dec = lognormal_site(f'{name}_aux2_dec')
+            aux2_dec = lognormal_site(f'{name}_aux2_dec', inits)
             aux2 = numpyro.deterministic(f'{name}_aux2', aux2_dec * scale * scale)
             return numpyro.deterministic(name, jnp.sqrt(aux1 * aux2_dec) * scale)
 
         else:
-            aux2 = lognormal_site(f'{name}_aux2')
+            aux2 = lognormal_site(f'{name}_aux2', inits)
             return numpyro.deterministic(name, jnp.sqrt(aux1 * aux2))
 
     def posterior(self, trace: TraceType, site: str, name: str, scale) -> dist.Distribution:
@@ -190,24 +174,66 @@ class ReparamIG:
         else:
             return trace[site]['fn']
 
-# * Config
-            
+
+# ** Type
 Reparam = None | ReparamII | ReparamIG
 
+# * Structured guide
+
+# ** Unstructured
+@dataclass
+class GuideUnstructured:
+    def guide(self, D: int, reparam: Reparam, coef_decentered: bool, tau: ArrayLike, c: ArrayLike, inits: dict[str, Any]):
+        with numpyro.plate('d', D):
+            if reparam:
+                lambda_ = reparam.guide('lambda', 1., inits)
+            else:
+                lambda_ = lognormal_site('lambda', inits)
+                    
+            lambda_reg = to_reg_lambda(tau**2, lambda_**2, c*c)
+
+            if coef_decentered:
+                coef_dec = normal_site('coef_dec', inits)
+                coef = numpyro.deterministic('coef', coef_dec * tau * lambda_reg)
+            else:
+                coef = normal_site('coef', inits)
+        
+# ** Structured
+@dataclass
+class GuideStructured:
+    def guide(self, D: int, reparam: Reparam, coef_dec: bool, tau: ArrayLike, c: ArrayLike):
+        with numpyro.plate('d', D):
+            if reparam is None:
+                lambda_ = numpyro.sample('lambda', dist.HalfCauchy(scale=1.))
+            else:
+                lambda_ = reparam.model('lambda', 1.)
+                
+            lambda_reg = numpyro.deterministic('lambda_reg', to_reg_lambda(tau**2, lambda_**2, c*c))
+
+            # Conditional q(coef|lambda)
+            
+        
+
+# ** Type
+GuideStructure = GuideUnstructured | GuideStructured
+
+# * Config
+            
 @dataclass
 class Configuration:
     X: ArrayLike
     Y: ArrayLike
     reparam: Reparam
+    structure: GuideStructure
     coef_dec: bool
     tau_scale: float
     c_df: float
     c_scale: float
-    inits: dict[str, Any] = field(default_factory=dict)
     N: int = field(init=False)
     D: int = field(init=False)
     model: Callable = field(init=False)
     guide: Callable = field(init=False)
+    inits: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         self.N, self.D = self.X.shape
@@ -229,7 +255,7 @@ class Configuration:
                 else:
                     lambda_ = self.reparam.model('lambda', 1.)
                     
-                lambda_reg = to_reg_lambda(tau**2, lambda_**2, c*c)
+                lambda_reg = numpyro.deterministic('lambda_reg', to_reg_lambda(tau**2, lambda_**2, c*c))
 
                 if self.coef_dec:
                     coef_dec = numpyro.sample('coef_dec', dist.Normal(0., 1.))
@@ -242,43 +268,28 @@ class Configuration:
                 numpyro.sample('y', dist.Normal(mean, noise), obs=self.Y)
         self.model = model
 
-        # Guide
-        def guide():
-            lognormal_site('noise')
-            c2_aux = lognormal_site('c2_aux')
-            c = self.c_scale * jnp.sqrt(c2_aux)
-
-            if self.reparam:
-                tau = self.reparam.guide('tau', self.tau_scale)
-            else:
-                tau = lognormal_site('tau')
-                
-            with numpyro.plate('d', self.D):
-                if self.reparam:
-                    lambda_ = self.reparam.guide('lambda', 1.)
-                else:
-                    lambda_ = lognormal_site('lambda')
-                        
-                lambda_reg = to_reg_lambda(tau**2, lambda_**2, c*c)
-
-                coef_name = 'coef' + ('_dec' if self.coef_dec else '')
-                coef_loc = numpyro.param(f'locs.{coef_name}', self.inits[f'locs.{coef_name}'])
-                coef_scale = numpyro.param(f'scales.{coef_name}',
-                                           self.inits[f'scales.{coef_name}'],
-              	                       constraint=pos_const)
-                if self.coef_dec:
-                    coef_dec = numpyro.sample('coef_dec', dist.Normal(coef_loc, coef_scale))
-                    coef = numpyro.deterministic('coef', coef_dec * tau * lambda_reg)
-                else:
-                    coef = numpyro.sample('coef', dist.Normal(coef_loc, coef_scale))
-
-        self.guide = guide
-
-        # Populate init values
+        # SVI inits
         t = handlers.trace(handlers.seed(self.model, 0)).get_trace()
         for name, node in t.items():
             if node['type'] != 'sample':
                 continue
+            if name in ['c', 'lambda_reg']:
+                continue
             shape = node['fn'].shape()
             self.inits[f'locs.{name}'] = jnp.zeros(shape)
             self.inits[f'scales.{name}'] = jnp.full(shape, .1)
+        
+        # Guide
+        def guide():
+            lognormal_site('noise', self.inits)
+            c2_aux = lognormal_site('c2_aux', self.inits)
+            c = self.c_scale * jnp.sqrt(c2_aux)
+
+            if self.reparam:
+                tau = self.reparam.guide('tau', self.tau_scale, self.inits)
+            else:
+                tau = lognormal_site('tau', self.inits)
+
+            self.structure.guide(self.D, self.reparam, self.coef_dec, tau, c, self.inits)
+
+        self.guide = guide
