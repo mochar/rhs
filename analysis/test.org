@@ -1,0 +1,206 @@
+:PROPERTIES:
+:header-args: :async yes :session rhsp
+:END:
+
+#+begin_src jupyter-python
+%load_ext autoreload
+%autoreload 2
+
+import jax
+from jax import random
+from jax import numpy as jnp
+import matplotlib.pyplot as plt
+import numpy as np
+import numpyro
+from numpyro.distributions import *
+
+import rhs
+
+jax.config.update('jax_platform_name', 'cpu')
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+dataset = rhs.datasets.TestDataset()
+reparam = None
+# reparam = rhs.ReparamIG(dec=False)
+# reparam = rhs.ReparamII(dec1=True, dec2=True)
+conf = rhs.Configuration(dataset.X, dataset.Y, reparam, tau_scale=0.01, c_df=5., c_scale=1.)
+trainer = rhs.TrainerMCMC(conf)
+#+end_src
+
+#+RESULTS:
+a
+
+* Prior
+#+begin_src jupyter-python
+dataset = rhs.datasets.TestDataset()
+# reparam = None
+# reparam = rhs.ReparamIG(dec=True)
+reparam = rhs.ReparamII(dec1=True, dec2=True)
+conf = rhs.Configuration(dataset.X, dataset.Y, reparam, tau_scale=100., c_df=10., c_scale=10.)
+trainer = rhs.TrainerMCMC(conf)
+samples = numpyro.infer.Predictive(trainer.conf.model, num_samples=500, exclude_deterministic=False)(random.key(0))
+samples.keys()
+#+end_src
+
+#+RESULTS:
+: dict_keys(['c', 'c2_aux', 'coef', 'coef_dec', 'lambda', 'lambda_aux1', 'lambda_aux1_dec', 'lambda_aux2', 'lambda_aux2_dec', 'noise', 'tau', 'tau_aux1', 'tau_aux1_dec', 'tau_aux2', 'tau_aux2_dec', 'y'])
+
+#+begin_src jupyter-python
+sites = ['c', 'coef']
+fig, axs = plt.subplots(ncols=len(sites))
+for site, ax in zip(sites, axs):
+    ax.hist(samples[site].flatten(), bins=30)
+    ax.set(title=site)
+None
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/c938740cb7d3e8e78d025d2e67a059dd80cc0b51.png]]
+
+#+begin_src jupyter-python
+x = samples['lambda'].flatten()
+x = x[x < 10]
+plt.hist(x, bins=50)
+None
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/3cf83e00a8eee01c1e4aa1fef611dbdef7d1495f.png]]
+
+* SVI
+#+begin_src jupyter-python
+trainer.train(10000)
+plt.plot(trainer.losses)
+trainer.save('/tmp/model.pkl')
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/a5ac00226818ac84c61b55390328177d125a27fd.png]]
+
+asd
+
+#+begin_src jupyter-python
+dataset.plot_coeffs(trainer)
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/b5bcf219cd073d9139c32c2a52bed8022f39540c.png]]
+
+
+#+begin_src jupyter-python
+fig, axs = plt.subplots(ncols=2, figsize=(8, 3), width_ratios=[1,3], sharey=True, layout='tight')
+
+axs[0].set(title='Tau')
+d = trainer.posterior('tau')
+xs = np.linspace(d.icdf(.001), d.icdf(.999), 100)
+p = np.exp(d.log_prob(xs))
+axs[0].plot(xs, p / p.max())
+
+axs[1].set(title='Lambda')
+d = trainer.posterior('lambda')
+xs = np.linspace(d.icdf(.001).min(), d.icdf(.999).max(), 100)
+p = np.exp(d.log_prob(xs[:, None]))
+axs[1].plot(xs, (p / p.max(0)))
+
+None
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/2458db70e0572badf77bdc210796f7a3a5eb5498.png]]
+
+#+begin_src jupyter-python
+prior = trainer.prior('c')
+post = trainer.posterior('c')
+xs = jnp.linspace(post.icdf(.0001), max(prior.icdf(.99), post.icdf(.99)), 300)
+plt.plot(xs, jnp.exp(prior.log_prob(xs)), label='prior')
+plt.plot(xs, jnp.exp(post.log_prob(xs)), label='posterior')
+plt.legend()
+plt.gca().set(title='c')
+None
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/ff3e5b0f22377c3e028954b77b9854225e4bf4bc.png]]
+
+
+#+begin_src jupyter-python
+fig, axs = plt.subplots(nrows=2)
+
+axs[0].set(title='lambda_aux1')
+d = trainer.posterior('lambda_aux1')
+xs = np.linspace(d.icdf(.001).min(), d.icdf(.9).max(), 100)
+p = np.exp(d.log_prob(xs[:, None]))
+axs[0].plot(xs, (p / p.max(0)))
+axs[0].plot(xs, (p:=np.exp(InverseGamma(.5, 1.).log_prob(xs)))/p.max(), c='k', ls='--')
+
+axs[1].set(title='lambda_aux2')
+d = trainer.posterior('lambda_aux2')
+prior = Gamma(.5, 1.)
+xs = np.linspace(d.icdf(.001).min(), d.icdf(.9).max(), 100)
+p = np.exp(d.log_prob(xs[:, None]))
+axs[1].plot(xs, (p / p.max(0)))
+axs[1].plot(xs, (p:=np.exp(prior.log_prob(xs)))/p.max(), c='k', ls='--')
+
+None
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/4a7b742c8c3531c83d8ecc3cbf9bcc53f8772dc3.png]]
+
+#+header: :var sharex="col" sharex='False
+#+begin_src jupyter-python
+sites = ['aux1_dec', 'aux1', 'aux2_dec', 'aux2', 'a', 'mu']
+fig, axs = plt.subplots(
+    nrows=len(models), ncols=len(sites), sharex=sharex,
+    figsize=(3*len(sites),2*len(models)), gridspec_kw=dict(wspace=0.2, hspace=0.2))
+
+for i, model in enumerate(models.values()):
+    axs[i, 0].set(ylabel=model.centering)
+    s = model.sample_posterior()
+
+    for j, site in enumerate(sites):
+        ax = axs[i, j]
+        ax.set_yticks([], [])
+        if i == 0:
+            ax.set(title=site)
+        try:
+            d = model.posterior(site)
+        except:
+            ax.set_xticks([], [])
+            continue
+
+        alpha = 1.
+        match site, model.centering:
+            case 'aux1', Centering.DEC1 | Centering.DEC:
+                alpha = 0.5
+            case 'aux2', Centering.DEC2 | Centering.DEC:
+                alpha = 0.5
+            case 'a', _ if not model.centering is Centering.BASE:
+                alpha = 0.5
+        
+        x = jnp.linspace(d.icdf(.01), d.icdf(.99), 300)
+        ax.hist(s[site], bins=30, alpha=alpha)
+        ax.axvline(s[site].mean(), ls='--', alpha=alpha)
+        ax.text(1.0, .7, f'{s[site].mean():.4f}',
+                transform=ax.transAxes,
+                ha='right', va='top')
+
+        axt = ax.twinx()
+        axt.margins(0.)
+        axt.yaxis.set_visible(False)
+        axt.plot(x, jnp.exp(d.log_prob(x)), c='deeppink', alpha=alpha)
+        axt.axvline(d.mean, ls='--', c='deeppink', alpha=alpha)
+        ax.text(1.0, .9, f'{d.mean:.4f}',
+                transform=ax.transAxes,
+                ha='right', va='top', c='deeppink')
+
+        if site == 'a':
+            ax.axvline(TRUE.scale, lw=2, c='k')
+        if site == 'mu':
+            ax.axvline(TRUE.mean, lw=2, c='k')
+
+None
+#+end_src

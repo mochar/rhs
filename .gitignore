@@ -1,2 +1,4 @@
 .ob-jupyter
 __pycache__
+.snakemake
+analysis/output

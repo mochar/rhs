@@ -1,0 +1,71 @@
+import multiprocessing as mp
+import functools
+import math
+from pathlib import Path
+import os
+
+import jax
+import tqdm
+import numpy as np
+import dill
+
+import rhs
+
+jax.config.update('jax_platform_name', 'cpu')
+
+OUT_PATH = Path('./output/')
+OUT_PATH.mkdir(exist_ok=True)
+
+dataset = rhs.datasets.TestDataset(B_k=np.array([2.0, -1.0, 1.]))
+dataset = rhs.datasets.TestDataset(B_k=np.array([6., 6., 6.]), correlated=True)
+with open(OUT_PATH / 'dataset.pkl', 'wb') as f:
+    dill.dump(dataset, f)
+tau_scale = dataset.K / ((dataset.X.shape[1]-dataset.K)*np.sqrt(dataset.X.shape[0]))
+print('Tau scale:', tau_scale)
+
+reparams = {
+    'base': None,
+    'ig_cen': rhs.ReparamIG(dec=False),
+    'ig_dec': rhs.ReparamIG(dec=True),
+    'ii_cen': rhs.ReparamII(dec1=False, dec2=False),
+    'ii_dec1': rhs.ReparamII(dec1=True, dec2=False),
+    'ii_dec2': rhs.ReparamII(dec1=False, dec2=True),
+    'ii_dec': rhs.ReparamII(dec1=True, dec2=True)
+}
+configs = {
+    name: rhs.Configuration(dataset.X, dataset.Y, reparam,
+                            structure=rhs.GuideUnstructured(), coef_dec=True,
+                            tau_scale=tau_scale, c_df=5., c_scale=3.)
+    for name, reparam in reparams.items()
+}
+
+
+rule all:
+    input:
+        expand(f'{OUT_PATH}/svi_{{name}}.pkl', name=configs.keys()),
+        expand(f'{OUT_PATH}/mcmc_{{name}}.pkl', name=configs.keys())
+        # expand(f'{OUT_PATH}/mcmc_{{name}}.pkl', name=['base', 'ig_dec', 'ii_dec'])
+
+rule svi:
+    output:
+        f'{OUT_PATH}/svi_{{name}}.pkl'
+    run:
+        name = wildcards.name
+        config = configs[name]
+        trainer = rhs.TrainerSVI(config)
+        # trainer.train(10_000)
+        trainer.train(30_000)
+        # trainer.train(300)
+        trainer.save(output[0])
+
+rule mcmc:
+    output:
+        f'{OUT_PATH}/mcmc_{{name}}.pkl'
+    run:
+        name = wildcards.name
+        config = configs[name]
+        trainer = rhs.TrainerMCMC(config)
+        # trainer = rhs.TrainerMCMC(config, num_warmup=1000, num_samples=1000)
+        trainer.train()
+        trainer.save(output[0])
+
