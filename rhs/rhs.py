@@ -104,8 +104,11 @@ class TrainerSVI(TrainerMixin):
         trace = handlers.trace(g).get_trace()
         return trace
 
-    def estimate(self, site: str) -> ArrayLike | None:
-        posterior = self.posterior(site)
+    def estimate(self, site: str | dist.Distribution, trace: TraceType | None = None) -> ArrayLike | None:
+        if isinstance(site, str):
+            posterior = self.posterior(site, trace=trace)
+        else:
+            posterior = site
         match type(posterior):
             case dist.LogNormal:
                 return posterior.mode
