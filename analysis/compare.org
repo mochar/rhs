@@ -38,6 +38,8 @@ with open('output/dataset.pkl', 'rb') as f:
 #+end_src
 
 #+RESULTS:
+: The autoreload extension is already loaded. To reload it, use:
+:   %reload_ext autoreload
 asdas
 
 * MCMC
@@ -1708,12 +1710,12 @@ svi_trainers = {name: rhs.TrainerSVI.load(f'output/svi_{name}.pkl') for name in 
 for name, trainer in svi_trainers.items():
     plt.plot(trainer.losses, label=name)
 plt.legend()
-plt.ylim([0, 100])
+plt.ylim([-30, 100])
 None
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/5ac7763eb790b7401d7a748ad679467f070e9f5c.png]]
+[[file:./.ob-jupyter/33407094105b5c9d9f70eaa6228e2959a0198b8c.png]]
 
 ** Coefficients
 #+begin_src jupyter-python
@@ -1725,13 +1727,13 @@ None
 
 #+RESULTS:
 :RESULTS:
-[[file:./.ob-jupyter/a64328be50411fc338a589970afa7bfde802f578.png]]
-[[file:./.ob-jupyter/825372068751b227b0588b5c38dbd533ec21694d.png]]
-[[file:./.ob-jupyter/c261ec2cb55d7615fc628597a30acb18f188a9e3.png]]
-[[file:./.ob-jupyter/ec90c6617f3fff92aa272d29d68ffcf779762712.png]]
-[[file:./.ob-jupyter/663e85a1318b54793ebae82fe26916739741580d.png]]
-[[file:./.ob-jupyter/36225a52820ad9928411a7318e990c2f0a860a1e.png]]
-[[file:./.ob-jupyter/374ea9e014ce37fc9920fdb7d9bc9ddd83eb8a6b.png]]
+[[file:./.ob-jupyter/f0b77c824470ae305afaa5ad434dffcaf817384b.png]]
+[[file:./.ob-jupyter/b9c30b22f4359ee0a17524890fb286cd398b1f99.png]]
+[[file:./.ob-jupyter/b3920634261479af015526d0a43eee3a30454dee.png]]
+[[file:./.ob-jupyter/af5d0eba1bd3be6fe41d5c88758078997f3addec.png]]
+[[file:./.ob-jupyter/c349e60a148f79be60e8a1ed7825cc7989a7191a.png]]
+[[file:./.ob-jupyter/5afa15381adc10766aeae460ec37023b7e1b2476.png]]
+[[file:./.ob-jupyter/6f36a4f3434ba5fa2dc287b570b3fdc8c460f849.png]]
 :END:
 
 ** Tau
@@ -1792,7 +1794,7 @@ None
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/9ac0a7433681dd046b0295f62aca0c5ef2e18bf3.png]]
+[[file:./.ob-jupyter/3adde1908c9ca0cc426f8c2f6cb07e35fdddc51d.png]]
 
 ** Lambda
 #+name: lambda-dists
@@ -1857,15 +1859,44 @@ None
 #+end_src
 
 #+RESULTS: lambda-dists
-[[file:./.ob-jupyter/4e29cc77a59a8512e06788d611b2d9d641ed4a2f.png]]
+[[file:./.ob-jupyter/7808fdccbec0164689872f012232ea683a7a90b6.png]]
 
 
 #+call: lambda-dists(k=1)
 
 #+RESULTS:
-[[file:./.ob-jupyter/55f381544d6378707213787bb7131d55e5e99e6c.png]]
+[[file:./.ob-jupyter/79e2358befe2ead1d89abba67325c79b631e52b6.png]]
 
 #+call: lambda-dists(k=2)
 
 #+RESULTS:
-[[file:./.ob-jupyter/b23700c032020feb3be71c0cf7f26b229f4aa1d5.png]]
+[[file:./.ob-jupyter/49dbf498a73a677f4b9e1d9267d30171413efcb4.png]]
+
+** Sampling
+#+begin_src jupyter-python
+fig, axs = plt.subplots(
+    nrows=len(svi_trainers), ncols=dataset.K, sharex=False,
+    figsize=(3*dataset.K,2*len(svi_trainers)),
+    gridspec_kw=dict(wspace=0.2, hspace=0.2))
+
+for i, (name, trainer) in enumerate(svi_trainers.items()):
+    for k in range(dataset.K):
+        m = trainer.posterior('lambda').mode
+        m = m[k*dataset.D_per:(k+1)*dataset.D_per]
+        d = m.argmax() + k*dataset.D_per
+
+        ax = axs[i, k]
+        corr = trainer.params['corrs.coef_lambda'][d]
+        ax.set(title=f'corr={corr:.3f}')
+        samples = trainer.sample_posterior(method='trace')
+        ax.scatter(samples['lambda'][:, d], samples['coef'][:, d], label='Trace')
+        
+        samples = trainer.sample_posterior(method='posterior')
+        # ax.scatter(samples['lambda'][:, d], samples['coef'][:, d], label='Posterior')
+        
+        # plt.legend()
+None        
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/044a26dc2961dee75744ce9c8a5eb7af22f323da.png]]

@@ -2,9 +2,13 @@
 :header-args: :async yes :session rhsp
 :END:
 
+* Preamble
+#+name: preamble
 #+begin_src jupyter-python
 %load_ext autoreload
 %autoreload 2
+
+import functools
 
 import jax
 from jax import random
@@ -13,13 +17,19 @@ import matplotlib.pyplot as plt
 import numpy as np
 import numpyro
 from numpyro.distributions import *
+from numpyro.infer import Predictive
+import pandas as pd
+import seaborn as sns
 
 import rhs
 
 jax.config.update('jax_platform_name', 'cpu')
 #+end_src
 
+#+RESULTS: preamble
+
 #+RESULTS:
+* Prior
 
 #+begin_src jupyter-python
 dataset = rhs.datasets.TestDataset()
@@ -33,7 +43,6 @@ trainer = rhs.TrainerMCMC(conf)
 #+RESULTS:
 a
 
-* Prior
 #+begin_src jupyter-python
 dataset = rhs.datasets.TestDataset()
 # reparam = None
@@ -71,6 +80,19 @@ None
 [[file:./.ob-jupyter/3cf83e00a8eee01c1e4aa1fef611dbdef7d1495f.png]]
 
 * SVI
+
+#+begin_src jupyter-python
+dataset = rhs.datasets.TestDataset()
+reparam = None
+# reparam = rhs.ReparamIG(dec=False)
+# reparam = rhs.ReparamII(dec1=True, dec2=True)
+conf = rhs.Configuration(dataset.X, dataset.Y, reparam, tau_scale=0.01, c_df=5., c_scale=1.)
+trainer = rhs.TrainerMCMC(conf)
+#+end_src
+
+#+RESULTS:
+a
+
 #+begin_src jupyter-python
 trainer.train(10000)
 plt.plot(trainer.losses)
@@ -204,3 +226,124 @@ for i, model in enumerate(models.values()):
 
 None
 #+end_src
+* Structured guide
+** Load
+#+call: preamble()
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+dataset = rhs.datasets.TestDataset(D_per=2)
+reparam = None
+# reparam = rhs.ReparamIG(dec=True)
+structure = rhs.GuideStructured()
+conf = rhs.Configuration(dataset.X, dataset.Y, reparam, structure=structure, coef_dec=False, tau_scale=dataset.tau_scale, c_df=5., c_scale=1.)
+trainer = rhs.TrainerSVI(conf)
+#+end_src
+
+#+RESULTS:
+
+** Sampling
+Confirm correctness posterior of coef by comparing it to trace sampling.
+
+#+begin_src jupyter-python
+trainer.params['corrs.coef_lambda'] = jnp.full(conf.D, -.9)
+d = 0
+
+samples = trainer.sample_posterior(method='trace')
+plt.scatter(samples['lambda'][:, d], samples['coef'][:, d], label='Trace')
+
+samples = trainer.sample_posterior(method='posterior')
+plt.scatter(samples['lambda'][:, d], samples['coef'][:, d], label='Posterior')
+
+plt.legend()
+None
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/56a17d47348eb9f2620abf52a1eda3ef76ce4fb0.png]]
+
+
+** Conditional
+#+header: :var corr=.99
+#+begin_src jupyter-python
+lambda_ = LogNormal(0., .1)
+lambdas = lambda_.icdf(jnp.array([.2, .5, .8]))
+coef = Normal(-1., .1)
+loc, scale = structure._posterior_coef(jnp.exp(lambda_.loc), lambda_.loc, lambda_.scale, coef.loc, coef.scale, corr)
+coef_cond = Normal(loc, scale)
+colors = ['steelblue', 'deeppink', 'green']
+
+fig, axs = plt.subplots(nrows=3, figsize=(5, 6), layout='tight')
+
+ax = axs[0]
+ax.set(title='lambda')
+xs = jnp.linspace(lambda_.icdf(.01), lambda_.icdf(.99), 300)
+ax.plot(xs, jnp.exp(lambda_.log_prob(xs)), c='k')
+for c, x in zip(colors, lambdas):
+    ax.axvline(x, c=c, lw=2, ls='--')
+
+ax = axs[1]
+ax.set(title='Coef')
+xs = jnp.linspace(coef.icdf(.01), coef.icdf(.99), 300)
+ax.plot(xs, jnp.exp(coef.log_prob(xs)), c='k')
+
+ax = axs[2]
+ax.set(title='Coef | lambda')
+xs = jnp.linspace(coef_cond.icdf(.01), coef_cond.icdf(.99), 300)
+ax.plot(xs, (p:=jnp.exp(coef_cond.log_prob(xs)))/p.max(), c='k')
+for c, l in zip(colors, lambdas):
+    loc, scale = structure._posterior_coef(l, lambda_.loc, lambda_.scale, coef.loc, coef.scale, corr)
+    coef_cond_sample = Normal(loc, scale)
+    xs = jnp.linspace(coef_cond_sample.icdf(.01), coef_cond_sample.icdf(.99), 300)
+    ax.plot(xs, (p:=jnp.exp(coef_cond_sample.log_prob(xs)))/p.max(), c=c, ls='--')
+ax.sharex(axs[1]) # Share with coef marginal
+    
+None
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/bc59ff135b771e3252b18d99a02b4a168b266f15.png]]
+
+asd
+
+#+header: :var corr=.001 corr=.9
+#+begin_src jupyter-python
+lambda_ = LogNormal(0., .1)
+coef = Normal(-1., .1)
+key = random.key(0)
+
+# Multivariate
+cov = lambda_.scale * coef.scale * corr
+loglambda_coef = MultivariateNormal(
+    jnp.array([lambda_.loc, coef.loc]),
+    jnp.array([[lambda_.scale**2, cov],
+               [cov,              coef.scale**2]]))
+
+key, subkey = random.split(key)
+samples = loglambda_coef.sample(subkey, (100,))
+mv_samples = pd.DataFrame({'lambda': jnp.exp(samples[:, 0]), 'coef': samples[:, 1], 'method': 'multivariate'})
+
+# Conditional
+# lambdas = lambda_.sample(random.key(0), (100,))
+lambdas = mv_samples['lambda']
+coefs = np.empty((100,))
+key, *subkeys = random.split(key, 101)
+for i, l in enumerate(lambdas):
+    loc, scale = structure._posterior_coef(l, lambda_.loc, lambda_.scale, coef.loc, coef.scale, corr)
+    coef_cond = Normal(loc, scale)
+    coefs[i] = coef_cond.sample(subkeys[i])
+cond_samples = pd.DataFrame({'lambda': lambdas, 'coef': coefs, 'method': 'conditional'})
+
+# Plot
+samples = pd.concat([cond_samples, mv_samples])
+# sns.scatterplot(data=samples, x='lambda', y='coef', hue='method')
+g = sns.jointplot(data=samples, x='lambda', y='coef', hue='method') 
+g.ax_joint.axhline(coef.mean, c='k', ls='--', alpha=.5)
+g.ax_joint.axvline(lambda_.mean, c='k', ls='--', alpha=.5)
+
+None
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/a6bb0e44a3b0bf65f41edc07c3eb66d5300c76d3.png]]

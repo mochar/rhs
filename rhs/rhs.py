@@ -1,6 +1,7 @@
 import re
 import dataclasses
 from dataclasses import dataclass, field
+from typing import Literal
 
 import dill
 import numpyro
@@ -17,7 +18,7 @@ import dacite
 
 from .dist import *
 from .common import TraceType
-from .model import Configuration, to_reg_lambda
+from .model import Configuration, to_reg_lambda, GuideUnstructured, GuideStructured
 
 
 @dataclass
@@ -97,10 +98,15 @@ class TrainerSVI(TrainerMixin):
             case _:
                 return trace[site]['fn']
     
-    def trace_guide(self, conditioned=True, seed=0) -> TraceType:
+    def trace_guide(self, conditioned=True, seed=0, with_sites=True) -> TraceType:
         g = handlers.seed(self.conf.guide, seed)
         if conditioned:
-            g = handlers.substitute(g, self.params)
+            data = {**self.params}
+            # if with_sites:
+                # t = self.trace_guide(with_sites=False)
+                # estimates = {site: self.estimate(site, t) for site in ['lambda']}
+                # data.update(estimates)
+            g = handlers.substitute(g, data)
         trace = handlers.trace(g).get_trace()
         return trace
 
@@ -115,9 +121,10 @@ class TrainerSVI(TrainerMixin):
             case dist.Normal:
                 return posterior.mean
 
-    def posterior(self, site: str) -> dist.Distribution:
+    def posterior(self, site: str, trace: TraceType | None = None) -> dist.Distribution | None:
         conf = self.conf
-        trace = self.trace_guide()
+        if trace is None:
+            trace = self.trace_guide()
 
         match site:
             case 'c':
@@ -125,18 +132,39 @@ class TrainerSVI(TrainerMixin):
                 loc = .5 * c2_aux.loc + jnp.log(conf.c_scale)
                 scale = .5 * c2_aux.scale
                 return dist.LogNormal(loc, scale)
-            case 'coef' if self.conf.coef_dec:
+            case 'coef':
+                lambda_post = self.posterior('lambda')
+                lambda_ = self.estimate(lambda_post)
+                
+                match self.conf.structure:
+                    case GuideUnstructured():
+                        coef = trace[self.conf.coef_name]['fn']
+                    case GuideStructured():
+                        coef_marginal = dist.Normal(
+                            self.params[f'locs.{self.conf.coef_name}'],
+                            self.params[f'scales.{self.conf.coef_name}'])
+                        corr = self.params['corrs.coef_lambda']
+                        loc, scale = self.conf.structure._posterior_coef(
+                            # None,
+                            lambda_,
+                            # lambda_post.mean,
+                            lambda_post.loc, lambda_post.scale,
+                            coef_marginal.loc, coef_marginal.scale, corr)
+                        coef = dist.Normal(loc, scale)
+
+                if not self.conf.coef_dec:
+                    return coef
+                
                 tau = self.estimate('tau')
-                lambda_reg = to_reg_lambda(tau**2, self.estimate('lambda')**2, self.estimate('c')**2)
+                lambda_reg = to_reg_lambda(tau**2, lambda_**2, self.estimate('c')**2)
                 rhs_scale = tau * lambda_reg
-                coef_dec = self.posterior('coef_dec')
-                return dist.Normal(coef_dec.loc * rhs_scale, coef_dec.scale * rhs_scale)
+                return dist.Normal(coef.loc * rhs_scale, coef.scale * rhs_scale)
             case _ if self.conf.reparam and (match := re.match(r'^(tau|lambda)', site)):
                 name = match[0]
                 scale = self.conf.tau_scale if name == 'tau' else 1.
                 return self.conf.reparam.posterior(trace, site, name, scale)
             case _:
-                return trace[site]['fn']
+                return trace[site].get('fn')
         
     def gather(self):
         self.params = self.svi.get_params(self.svi_state)
@@ -156,7 +184,17 @@ class TrainerSVI(TrainerMixin):
         finally:
             self.gather()
 
-    def sample_posterior(self, num_samples=300, seed=0):
-        pred = numpyro.infer.Predictive(
-            self.conf.guide, params=self.params, num_samples=num_samples)
-        return pred(random.key(seed))
+    def sample_posterior(self, num_samples=300, method: Literal['trace', 'posterior'] = 'trace', seed=0):
+        match method:
+            case 'trace':
+                pred = numpyro.infer.Predictive(
+                    self.conf.guide, params=self.params, num_samples=num_samples,
+                    exclude_deterministic=False)
+                return pred(random.key(seed))
+            case 'posterior':
+                keys = random.split(random.key(seed), num_samples)
+                samples = {site: self.posterior(site).sample(key, (num_samples,))
+                           for key, (site, node) in zip(keys, self.trace_guide().items())
+                           if node['type'] in ['sample', 'deterministic']}
+                return samples
+

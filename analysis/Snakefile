@@ -20,7 +20,7 @@ dataset = rhs.datasets.TestDataset(B_k=np.array([2.0, -1.0, 1.]))
 dataset = rhs.datasets.TestDataset(B_k=np.array([6., 6., 6.]), correlated=True)
 with open(OUT_PATH / 'dataset.pkl', 'wb') as f:
     dill.dump(dataset, f)
-tau_scale = dataset.K / ((dataset.X.shape[1]-dataset.K)*np.sqrt(dataset.X.shape[0]))
+tau_scale = dataset.tau_scale
 print('Tau scale:', tau_scale)
 
 reparams = {
@@ -34,7 +34,9 @@ reparams = {
 }
 configs = {
     name: rhs.Configuration(dataset.X, dataset.Y, reparam,
-                            structure=rhs.GuideUnstructured(), coef_dec=True,
+                            # structure=rhs.GuideUnstructured(),
+                            structure=rhs.GuideStructured(),
+                            coef_dec=False,
                             tau_scale=tau_scale, c_df=5., c_scale=3.)
     for name, reparam in reparams.items()
 }

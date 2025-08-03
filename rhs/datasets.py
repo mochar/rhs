@@ -19,6 +19,7 @@ class TestDataset:
     X: ArrayLike = field(init=False)
     Y: ArrayLike = field(init=False)
     Y_std: ArrayLike = field(init=False)
+    tau_scale: float = field(init=False)
 
     def __post_init__(self):
         self.D = self.D_per * self.K
@@ -48,6 +49,8 @@ class TestDataset:
         self.Y_std = self.Y.std()
         self.Y = (self.Y-self.Y.mean()) / self.Y.std()
         self.B_k_std = self.B_k/self.Y_std
+
+        self.tau_scale = self.K / ((self.X.shape[1]-self.K)*np.sqrt(self.X.shape[0]))
 
     def plot_coeffs(self, trainer: TrainerSVI):
         coefs = trainer.estimates['coef']
