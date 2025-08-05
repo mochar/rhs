@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import numpyro
 from numpyro.distributions import *
+from numpyro import handlers
 from numpyro.infer import Predictive
 import pandas as pd
 import seaborn as sns
@@ -232,11 +233,14 @@ None
 
 #+RESULTS:
 
+s
+
 #+begin_src jupyter-python
 dataset = rhs.datasets.TestDataset(D_per=2)
 reparam = None
 # reparam = rhs.ReparamIG(dec=True)
-structure = rhs.GuideStructured()
+structure = rhs.GuidePairCond()
+# structure = rhs.GuidePairMv()
 conf = rhs.Configuration(dataset.X, dataset.Y, reparam, structure=structure, coef_dec=False, tau_scale=dataset.tau_scale, c_df=5., c_scale=1.)
 trainer = rhs.TrainerSVI(conf)
 #+end_src
@@ -247,7 +251,7 @@ trainer = rhs.TrainerSVI(conf)
 Confirm correctness posterior of coef by comparing it to trace sampling.
 
 #+begin_src jupyter-python
-trainer.params['corrs.coef_lambda'] = jnp.full(conf.D, -.9)
+trainer.params['corrs.lambda_coef'] = jnp.full(conf.D, -.9)
 d = 0
 
 samples = trainer.sample_posterior(method='trace')
@@ -261,7 +265,7 @@ None
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/56a17d47348eb9f2620abf52a1eda3ef76ce4fb0.png]]
+[[file:./.ob-jupyter/44beda4e438928a25aaef81fda7a910dbf0192a3.png]]
 
 
 ** Conditional
@@ -347,3 +351,64 @@ None
 
 #+RESULTS:
 [[file:./.ob-jupyter/a6bb0e44a3b0bf65f41edc07c3eb66d5300c76d3.png]]
+
+* Pair cond vs mv
+#+begin_src jupyter-python
+dataset = rhs.datasets.TestDataset(D_per=2)
+trainer_cond = rhs.TrainerSVI(rhs.Configuration(dataset.X, dataset.Y, None, structure=rhs.GuidePairCond(), coef_dec=False, tau_scale=dataset.tau_scale, c_df=5., c_scale=1.))
+trainer_mv = rhs.TrainerSVI(rhs.Configuration(dataset.X, dataset.Y, None, structure=rhs.GuidePairMv(), coef_dec=False, tau_scale=dataset.tau_scale, c_df=5., c_scale=1.))
+trainers = dict(cond=trainer_cond, mv=trainer_mv)
+#+end_src
+
+#+RESULTS:
+
+** Correlation in samples
+#+begin_src jupyter-python
+fig, axs = plt.subplots(ncols=2)
+d = 0
+for ax, (name, trainer) in zip(axs, trainers.items()):
+    trainer.params['corrs.lambda_coef'] = jnp.full(trainer.conf.D, -.9)
+    samples = trainer.sample_posterior(method='trace')
+    ax.scatter(samples['lambda'][:, d], samples['coef'][:, d])
+None
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/5f311af9706d1e02c18b828a363d80d56361c797.png]]
+
+
+** Compare log_probs
+
+#+begin_src jupyter-python
+# Fix params of the lambda and coef distributions. In both cases they are
+# parameterized the same way: decoupled loc and scale for both, and a corr
+# parameter.
+data = {**trainer_mv.params}
+# Fix the sample sites. For the multivariate case need joint samples, for
+# the conditional case they are seperate sites.
+loglambda_coef = trainer_mv.trace_guide()['loglambda_coef']['value']
+data['loglambda_coef'] = loglambda_coef
+data['lambda'] = jnp.exp(loglambda_coef[:, 0])
+data['coef'] = loglambda_coef[:, 1]
+
+# Trace the guide substituted with the data and calculate log probs.
+traces = {}
+for name, trainer in trainers.items():
+    g = handlers.substitute(trainer.conf.guide, data)
+    _, trace_g = numpyro.infer.util.get_importance_trace(
+        handlers.seed(trainer.conf.model, 0), handlers.seed(g, 0), [], {}, {})
+    traces[name] = trace_g
+
+# In the multivariate case we simply need the log_prob from the join
+print('Multivariate:', traces['mv']['loglambda_coef']['log_prob'])
+
+# In the conditional case we need to add up the log_probs.
+# Note that lambda needs jacobian adjustment for log transform
+marg_lp = traces['cond']['lambda']['log_prob'] + loglambda_coef[:, 0]
+cond_lp = traces['cond']['coef']['log_prob']
+print('Conditional:', marg_lp + cond_lp)
+#+end_src
+
+#+RESULTS:
+: Multivariate: [0.9460509 2.0908525 3.5045884 3.591191  2.237097  3.455056 ]
+: Conditional: [0.94605076 2.090853   3.5045884  3.5911913  2.237096   3.4550557 ]

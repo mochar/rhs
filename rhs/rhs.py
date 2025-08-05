@@ -18,7 +18,8 @@ import dacite
 
 from .dist import *
 from .common import TraceType
-from .model import Configuration, to_reg_lambda, GuideUnstructured, GuideStructured
+from .model import Configuration, to_reg_lambda
+from .model import GuideUnstructured, GuideMatrix, GuidePairCond, GuidePairMv
 
 
 @dataclass
@@ -139,12 +140,12 @@ class TrainerSVI(TrainerMixin):
                 match self.conf.structure:
                     case GuideUnstructured():
                         coef = trace[self.conf.coef_name]['fn']
-                    case GuideStructured():
+                    case GuidePairCond() | GuidePairMv():
                         coef_marginal = dist.Normal(
                             self.params[f'locs.{self.conf.coef_name}'],
                             self.params[f'scales.{self.conf.coef_name}'])
-                        corr = self.params['corrs.coef_lambda']
-                        loc, scale = self.conf.structure._posterior_coef(
+                        corr = self.params['corrs.lambda_coef']
+                        loc, scale = GuidePairCond._posterior_coef(
                             # None,
                             lambda_,
                             # lambda_post.mean,
@@ -159,6 +160,10 @@ class TrainerSVI(TrainerMixin):
                 lambda_reg = to_reg_lambda(tau**2, lambda_**2, self.estimate('c')**2)
                 rhs_scale = tau * lambda_reg
                 return dist.Normal(coef.loc * rhs_scale, coef.scale * rhs_scale)
+            case 'lambda' if isinstance(self.conf.structure, GuidePairMv):
+                return dist.LogNormal(
+                    self.params['locs.lambda'],
+                    self.params['scales.lambda'])
             case _ if self.conf.reparam and (match := re.match(r'^(tau|lambda)', site)):
                 name = match[0]
                 scale = self.conf.tau_scale if name == 'tau' else 1.

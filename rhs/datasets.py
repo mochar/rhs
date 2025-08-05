@@ -69,9 +69,9 @@ class TestDataset:
         
         # if trainer.guide is not guide_factorized:
             # if trainer.guide is guide_mvn:
-                # corrs = ((L:=trainer.params['coef_lambda_cholcorr']) @ L.mT)[:, 1, 0]
+                # corrs = ((L:=trainer.params['lambda_coef_cholcorr']) @ L.mT)[:, 1, 0]
             # elif trainer.guide is guide_mvn_cond:
-                # corrs = trainer.params['coef_lambda_corr']
+                # corrs = trainer.params['lambda_coef_corr']
             # fig, ax = plt.subplots(figsize=(6.3, 2.2))
             # ax.scatter(range(self.D), corrs)
             # ax.axvspan(-.5, dataset.D_per-.5, alpha=0.1, color='k')
