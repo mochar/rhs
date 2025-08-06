@@ -229,6 +229,9 @@ Reparam = None | ReparamII | ReparamIG
 # ** Unstructured
 @dataclass
 class GuideUnstructured:
+    """
+    Mean field.
+    """
     name = 'unstructured'
     
     def guide(self, D: int, reparam: Reparam, coef_decentered: bool, tau: ArrayLike, c: ArrayLike, inits: dict[str, Any]):
@@ -249,6 +252,10 @@ class GuideUnstructured:
 # ** Paired Mv Normal
 @dataclass
 class GuidePairMv:
+    """
+    Model each (lambda_d, coef_d) pair as a multivariate normal.
+    This requires lambda to be a sample site, so it cannot be used with a reparam.
+    """
     name = 'pairmv'
         
     def guide(self, D: int, reparam: Reparam, coef_decentered: bool, tau: ArrayLike, c: ArrayLike, inits: dict[str, Any]):
@@ -299,6 +306,12 @@ class GuidePairMv:
 # ** Paired Conditional
 @dataclass
 class GuidePairCond:
+    """
+    Model each (lambda_d, coef_d) pair as a multivariate normal, but using seperate sites
+    using p(lambda_d, coef_d)=p(coef_d|lambda_d)p(lambda_d).
+    This does not require lambda to be a sample site, as long as a lambda values can be
+    passed into the conditional, so it cannot be used with a reparam.
+    """
     name = 'paircond'
 
     @staticmethod
@@ -339,17 +352,89 @@ class GuidePairCond:
                 coef = numpyro.deterministic('coef', coef_dec * tau * lambda_reg)
             else:
                 coef_ = numpyro.sample('coef', coef_dist)
-        
 
-    def _posterior_coef(self, lambda_, lambda_loc, lambda_scale, coef_loc, coef_scale, corr) -> tuple[ArrayLike, ArrayLike]:
-        if lambda_ is None: # lambda_ = lambda_loc
-            loc = coef_loc
-        else:
-            loc = coef_loc + corr * coef_scale / lambda_scale * (jnp.log(lambda_) - lambda_loc)
-        scale = jnp.sqrt(1 - corr**2) * coef_scale
-        return loc, scale
+# ** Paired Conditional Correlated
+@dataclass
+class GuidePairCondCorr(GuidePairCond):
+    """
+    Same as GuidePairCond, but model the dependencies of the resulting coefs as a
+    multivariate normal.
+    """
+    name = 'paircondcorr'
+
+    low_rank_factor: int | None = None
     
     def guide(self, D: int, reparam: Reparam, coef_decentered: bool, tau: ArrayLike, c: ArrayLike, inits: dict[str, Any]):
+        coef_name = 'coef' + ('_dec' if coef_decentered else '')
+
+        with numpyro.plate('d', D):
+            if reparam:
+                lambda_, lambda_loc, lambda_scale = reparam.guide('lambda', 1., inits)
+            else:
+                lambda_, lambda_loc, lambda_scale = lognormal_site('lambda', inits)
+
+            lambda_reg = to_reg_lambda(tau**2, lambda_**2, c*c)
+
+            lambda_coef_corr = numpyro.param(
+                'corrs.lambda_coef', 
+                lambda _: inits.get('corrs.lambda_coef', jnp.zeros(lambda_.shape)),
+                constraint=dist.constraints.interval(-1., 1.))
+
+            coef_loc = numpyro.param(f'locs.{coef_name}', inits[f'locs.{coef_name}'])
+            coef_scale = numpyro.param(
+                f'scales.{coef_name}',
+                inits[f'scales.{coef_name}'],
+                constraint=pos_const)
+    
+        coef_loc_cond, coef_scale_cond = self._posterior_coef(lambda_, lambda_loc, lambda_scale, coef_loc, coef_scale, lambda_coef_corr)
+
+        if self.low_rank_factor is None:
+            coef_chol_corr = numpyro.param(
+                'chols.coef',
+                lambda k: inits.get('chols.coef', dist.LKJCholesky(D).sample(k)),
+                constraint=dist.constraints.corr_cholesky)
+            coef_chol_cov = jnp.diag(coef_scale_cond) @ coef_chol_corr @ jnp.diag(coef_scale_cond).T
+            coef_joint = numpyro.sample(
+                'coef_joint',
+                dist.MultivariateNormal(coef_loc_cond, scale_tril=coef_chol_cov),
+                infer={'is_auxiliary': True})
+        else:
+            coef_cov_factor = numpyro.param(
+                'coef_factor',
+                lambda _: inits.get('coef_factor', jnp.ones((D, self.low_rank_factor))*0.))
+            coef_cov_diag = jnp.square(coef_scale_cond) - jnp.square(coef_cov_factor).sum(-1)
+            coef_cov_diag = jnp.clip(coef_cov_diag, min=1e-6)
+            # coef_cov_diag = jnp.square(coef_scale_cond - coef_cov_factor.sum(-1))
+            coef_joint = numpyro.sample(
+                'coef_joint',
+                dist.LowRankMultivariateNormal(coef_loc_cond, coef_cov_factor, coef_cov_diag),
+                infer={'is_auxiliary': True})
+
+        with numpyro.plate('d', D):
+            if coef_decentered:
+                coef_dec = numpyro.sample('coef_dec', dist.Delta(coef_joint))
+                coef = numpyro.deterministic('coef', coef_dec * tau * lambda_reg)
+            else:
+                coef_ = numpyro.sample('coef', dist.Delta(coef_joint))
+
+
+# ** Full Matrix
+@dataclass
+class GuideFullMatrix:
+    """
+    Model p(lambda, coef) over all dimensions as a matrix normal.
+    """
+    name = 'fullmatrix'
+
+    # TODO implement
+    def guide(self, D: int, reparam: Reparam, coef_decentered: bool, tau: ArrayLike, c: ArrayLike, inits: dict[str, Any]):
+        lambda_loc = numpyro.param('locs.lambda', inits['locs.lambda'])
+
+        coef_name = 'coef' + ('_dec' if coef_decentered else '')
+        coef_loc = numpyro.param(f'locs.{coef_name}', inits[f'locs.{coef_name}'])
+
+        
+
         with numpyro.plate('d', D):
             if reparam:
                 lambda_, lambda_loc, lambda_scale = reparam.guide('lambda', 1., inits)
@@ -381,7 +466,7 @@ class GuidePairCond:
 
 
 # ** Type
-GuideStructure = GuideUnstructured | GuidePairCond | GuidePairMv | GuideMatrix
+GuideStructure = GuideUnstructured | GuidePairCond | GuidePairMv | GuideFullMatrix | GuidePairCondCorr
 
 # * Config
             

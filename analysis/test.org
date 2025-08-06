@@ -13,6 +13,7 @@ import functools
 import jax
 from jax import random
 from jax import numpy as jnp
+import optax
 import matplotlib.pyplot as plt
 import numpy as np
 import numpyro
@@ -28,7 +29,8 @@ jax.config.update('jax_platform_name', 'cpu')
 #+end_src
 
 #+RESULTS: preamble
-
+:RESULTS:
+:END:
 #+RESULTS:
 * Prior
 
@@ -412,3 +414,61 @@ print('Conditional:', marg_lp + cond_lp)
 #+RESULTS:
 : Multivariate: [0.9460509 2.0908525 3.5045884 3.591191  2.237097  3.455056 ]
 : Conditional: [0.94605076 2.090853   3.5045884  3.5911913  2.237096   3.4550557 ]
+
+* Paired cond correlated
+#+begin_src jupyter-python
+dataset = rhs.datasets.TestDataset(D_per=10, B_k=np.array([6., 6., 6.]))
+conf = rhs.Configuration(dataset.X, dataset.Y,
+                         # None,
+                         # rhs.ReparamIG(True),
+                         rhs.ReparamII(False, True),
+                         # structure=rhs.GuideUnstructured(),
+                         structure=rhs.GuidePairCond(),
+                         # structure=rhs.GuidePairCondCorr(5),
+                         coef_dec=True,
+                         tau_scale=dataset.tau_scale, c_df=3., c_scale=30.)
+if isinstance(conf.structure, rhs.GuidePairCondCorr) and conf.structure.low_rank_factor:
+    conf.inits['coef_factor'] = HalfNormal(.001).sample(random.key(0), (conf.D, conf.structure.low_rank_factor))
+# trainer = rhs.TrainerSVI(conf, optim=optax.adam(0.01), elbo=numpyro.infer.Trace_ELBO(10))
+trainer = rhs.TrainerSVI(conf, optim=optax.adam(0.01), elbo=numpyro.infer.TraceMeanField_ELBO(10))
+#+end_src
+
+#+RESULTS:
+
+** Train
+#+header: :var iters=(* 1000 3)
+#+begin_src jupyter-python
+trainer.train(iters)
+plt.plot(trainer.losses)
+plt.suptitle(trainer.losses[-1])
+None
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/49c2f664acb3a346ca3b168022caa6aaedbf3689.png]]
+
+alsjd
+
+#+begin_src jupyter-python
+dataset.plot_coeffs(trainer)
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/13853e5fad519c21a5bdba2312a2c09496d0eb0b.png]]
+
+lsjadskj
+
+#+header: :var v=.3
+#+begin_src jupyter-python
+if isinstance(conf.structure, rhs.GuidePairCondCorr):
+    if conf.structure.low_rank_factor is None:
+        corr = (x:=trainer.params['chols.coef'])@x.T
+        sns.heatmap(corr, center=0, vmin=-v, vmax=v)
+    else:
+        t = trainer.trace_guide()
+        cov = t['coef_joint']['fn'].covariance_matrix
+        sns.heatmap(cov, center=0, vmin=-v, vmax=v)
+
+None
+#+end_src
+#+RESULTS:

@@ -19,7 +19,7 @@ import dacite
 from .dist import *
 from .common import TraceType
 from .model import Configuration, to_reg_lambda
-from .model import GuideUnstructured, GuideMatrix, GuidePairCond, GuidePairMv
+from .model import GuideUnstructured, GuideFullMatrix, GuidePairCond, GuidePairMv, GuidePairCondCorr
 
 
 @dataclass
@@ -140,7 +140,7 @@ class TrainerSVI(TrainerMixin):
                 match self.conf.structure:
                     case GuideUnstructured():
                         coef = trace[self.conf.coef_name]['fn']
-                    case GuidePairCond() | GuidePairMv():
+                    case GuidePairCond() | GuidePairMv() | GuidePairCondCorr():
                         coef_marginal = dist.Normal(
                             self.params[f'locs.{self.conf.coef_name}'],
                             self.params[f'scales.{self.conf.coef_name}'])
