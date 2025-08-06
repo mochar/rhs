@@ -36,13 +36,15 @@ class TrainerMixin:
 
     def save(self, path):
         with open(path, 'wb') as f:
-            dill.dump(dataclasses.asdict(self), f)
+            # dill.dump(dataclasses.asdict(self), f)
+            dill.dump(self, f)
 
     @classmethod
     def load(cls, path):
         with open(path, 'rb') as f:
             data = dill.load(f)
-            trainer = dacite.from_dict(data_class=cls, data=data)
+            # trainer = dacite.from_dict(data_class=cls, data=data)
+            trainer = data
             trainer.gather()
             return trainer
 
