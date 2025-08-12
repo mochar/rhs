@@ -1,11 +1,13 @@
 import numpyro
 import numpyro.distributions as dist
+from numpyro.infer.autoguide import AutoNormal
 from numpyro import handlers
 import optax
 from jax import random
 from jax import numpy as jnp
 
 from rhs.elbo import MultiELBO, site_mask
+from rhs.utils import get_sample_params
 
 
 def model():
@@ -14,6 +16,13 @@ def model():
     c = numpyro.sample('c', dist.Normal(b))
 
 
+def test_sample_params():
+    guide = AutoNormal(model)
+    sample_params = get_sample_params(guide)
+    for s in ['a', 'b', 'c']:
+        for t in ['loc', 'scale']:
+            assert f'{s}_auto_{t}' in sample_params[s]
+    
 class TestSiteMask:
     masked_sites = ['a', 'b']
 
@@ -37,10 +46,12 @@ class TestMultiELBO():
             b = numpyro.sample('b', dist.Normal(a))
             c = numpyro.sample('c', dist.Normal(b))
 
-        guide = numpyro.infer.autoguide.AutoNormal(model)
+        guide = AutoNormal(model)
 
+        sample_params = get_sample_params(AutoNormal(model))
+        some_sites = ('a', 'b', *sample_params['a'], *sample_params['b'])
         elbos = {
-            ('a', 'a_auto_loc' , 'a_auto_scale', 'b', 'b_auto_loc', 'b_auto_scale'): numpyro.infer.Trace_ELBO(),
+            some_sites: numpyro.infer.Trace_ELBO(),
             None: numpyro.infer.Trace_ELBO()
         }
         elbo_multi = MultiELBO.build(elbos, model, guide)
