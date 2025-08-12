@@ -1,5 +1,4 @@
 import re
-import dataclasses
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -7,19 +6,18 @@ import dill
 import numpyro
 import numpyro.distributions as dist
 from numpyro import handlers
-from numpyro.infer import MCMC, HMC, NUTS
+from numpyro.infer import MCMC, NUTS
 from numpyro.infer.mcmc import MCMCKernel
 from numpyro.infer.svi import SVIState
 import jax.numpy as jnp
 from jax import random
 from jax.typing import ArrayLike
 import optax
-import dacite
 
 from .dist import *
 from .common import TraceType
 from .model import Configuration, to_reg_lambda
-from .model import GuideUnstructured, GuideFullMatrix, GuidePairCond, GuidePairMv, GuidePairCondCorr
+from .model import GuideUnstructured, GuidePairCond, GuidePairMv, GuidePairCondCorr
 
 
 @dataclass

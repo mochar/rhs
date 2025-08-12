@@ -48,6 +48,7 @@ class TestMultiELBO():
 
         guide = AutoNormal(model)
 
+        # TODO This gives me weird error if i pass guide in directly
         sample_params = get_sample_params(AutoNormal(model))
         some_sites = ('a', 'b', *sample_params['a'], *sample_params['b'])
         elbos = {

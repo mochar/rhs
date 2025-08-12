@@ -6,6 +6,7 @@ import numpyro
 import numpyro.distributions as dist
 from numpyro import handlers
 import jax.numpy as jnp
+from jax import random
 from jax.typing import ArrayLike
 
 from .common import TraceType
@@ -277,7 +278,7 @@ class GuidePairMv:
 
             lambda_coef_corr = numpyro.param(
                 'corrs.lambda_coef', 
-                lambda _: inits.get('corrs.lambda_coef', jnp.full(D, 0.0)),
+                inits.get('corrs.lambda_coef', jnp.full(D, 0.0)),
                 constraint=dist.constraints.interval(-1., 1.))
             
             covs = lambda_coef_corr * lambda_scale * coef_scale
@@ -332,9 +333,11 @@ class GuidePairCond:
 
             lambda_reg = to_reg_lambda(tau**2, lambda_**2, c*c)
 
+            # If i use lambda here, utils.get_sample_params raises error
             lambda_coef_corr = numpyro.param(
                 'corrs.lambda_coef', 
-                lambda _: inits.get('corrs.lambda_coef', jnp.zeros(lambda_.shape)),
+                # lambda _: inits.get('corrs.lambda_coef', jnp.zeros(lambda_.shape)),
+                inits.get('corrs.lambda_coef', jnp.zeros(lambda_.shape)),
                 constraint=dist.constraints.interval(-1., 1.))
 
             coef_name = 'coef' + ('_dec' if coef_decentered else '')
@@ -377,7 +380,7 @@ class GuidePairCondCorr(GuidePairCond):
 
             lambda_coef_corr = numpyro.param(
                 'corrs.lambda_coef', 
-                lambda _: inits.get('corrs.lambda_coef', jnp.zeros(lambda_.shape)),
+                inits.get('corrs.lambda_coef', jnp.zeros(lambda_.shape)),
                 constraint=dist.constraints.interval(-1., 1.))
 
             coef_loc = numpyro.param(f'locs.{coef_name}', inits[f'locs.{coef_name}'])
@@ -391,7 +394,7 @@ class GuidePairCondCorr(GuidePairCond):
         if self.low_rank_factor is None:
             coef_chol_corr = numpyro.param(
                 'chols.coef',
-                lambda k: inits.get('chols.coef', dist.LKJCholesky(D).sample(k)),
+                inits['chols.coef'],
                 constraint=dist.constraints.corr_cholesky)
             coef_chol_cov = jnp.diag(coef_scale_cond) @ coef_chol_corr @ jnp.diag(coef_scale_cond).T
             coef_joint = numpyro.sample(
@@ -401,7 +404,7 @@ class GuidePairCondCorr(GuidePairCond):
         else:
             coef_cov_factor = numpyro.param(
                 'coef_factor',
-                lambda _: inits.get('coef_factor', jnp.ones((D, self.low_rank_factor))*0.))
+                inits.get('coef_factor', jnp.ones((D, self.low_rank_factor))*0.))
             coef_cov_diag = jnp.square(coef_scale_cond) - jnp.square(coef_cov_factor).sum(-1)
             coef_cov_diag = jnp.clip(coef_cov_diag, min=1e-6)
             # coef_cov_diag = jnp.square(coef_scale_cond - coef_cov_factor.sum(-1))
@@ -445,7 +448,7 @@ class GuideFullMatrix:
 
             lambda_coef_corr = numpyro.param(
                 'corrs.lambda_coef',
-                lambda _: inits.get('corrs.lambda_coef', jnp.zeros(lambda_.shape)),
+                inits.get('corrs.lambda_coef', jnp.zeros(lambda_.shape)),
                 constraint=dist.constraints.interval(-1., 1.))
 
             coef_name = 'coef' + ('_dec' if coef_decentered else '')
@@ -522,7 +525,7 @@ class Configuration:
         self.model = model
 
         # SVI inits
-        self.inits = self.make_inits(self.model)
+        self.inits = self.make_inits()
         
         # Guide
         def guide():
@@ -544,9 +547,8 @@ class Configuration:
         reparam_name = self.reparam.name if self.reparam else 'base'
         return f'{self.structure.name}_{reparam_name}'
 
-    @staticmethod
-    def make_inits(func: Callable) -> dict[str, Any]:
-        t = handlers.trace(handlers.seed(func, 0)).get_trace()
+    def make_inits(self) -> dict[str, Any]:
+        t = handlers.trace(handlers.seed(self.model, 0)).get_trace()
         inits: dict[str, Any] = {}
         for name, node in t.items():
             if node['type'] != 'sample':
@@ -554,4 +556,6 @@ class Configuration:
             shape = node['fn'].shape()
             inits[f'locs.{name}'] = jnp.zeros(shape)
             inits[f'scales.{name}'] = jnp.full(shape, .1)
+            
+        inits['chols.coef'] = dist.LKJCholesky(self.D).sample(random.key(0))
         return inits
