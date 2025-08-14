@@ -40,22 +40,29 @@ class TestSiteMask:
 
 
 class TestMultiELBO():
+    def test_append_params(self):
+        elbos = {
+            ('a', 'b'): numpyro.infer.Trace_ELBO(),
+            ('c',): numpyro.infer.Trace_ELBO()
+        }
+        elbo_multi = MultiELBO.build(elbos, model, AutoNormal(model), append_params=True)
+        sites = list(elbo_multi.elbos.keys())
+        assert set(sites[0]) == {'a', 'a_auto_loc', 'a_auto_scale',
+                                 'b', 'b_auto_loc', 'b_auto_scale'}
+        assert set(sites[1]) == {'c', 'c_auto_loc', 'c_auto_scale'}
+        
     def test_loss_same(self):
-        def model():
-            a = numpyro.sample('a', dist.Normal())
-            b = numpyro.sample('b', dist.Normal(a))
-            c = numpyro.sample('c', dist.Normal(b))
-
         guide = AutoNormal(model)
 
         # TODO This gives me weird error if i pass guide in directly
+        # https://github.com/pyro-ppl/numpyro/issues/2062
         sample_params = get_sample_params(AutoNormal(model))
         some_sites = ('a', 'b', *sample_params['a'], *sample_params['b'])
         elbos = {
             some_sites: numpyro.infer.Trace_ELBO(),
             None: numpyro.infer.Trace_ELBO()
         }
-        elbo_multi = MultiELBO.build(elbos, model, guide)
+        elbo_multi = MultiELBO.build(elbos, model, guide, append_params=False)
         assert set(list(elbo_multi.elbos.keys())[1]) == set(['c', 'c_auto_loc', 'c_auto_scale'])
 
         key = random.key(0)

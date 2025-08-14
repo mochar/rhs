@@ -5,6 +5,8 @@ from numpyro.primitives import Message, Messenger
 from numpyro.infer.elbo import ELBO
 from numpyro import handlers
 
+from .utils import get_sample_params
+
 
 class MultiELBO(ELBO):
     def __init__(self, elbos: dict[tuple, ELBO]):
@@ -14,12 +16,39 @@ class MultiELBO(ELBO):
     def build(
         elbos: dict[tuple | None, ELBO],
         model: Callable,
-        guide: Callable
+        guide: Callable,
+        append_params: bool = True
     ) -> Self:
+        """Convenience method to build the `elbos` parameter for the class.
+        
+        The `elbos` dict of the method maps site names to ELBO instance. When
+        `append_params` is True, the site names only have to contain the sample
+        site names - the corresponding params will be appended
+        automatically. Furthermore, one of the keys may be set to None, in which
+        case it will be filled in with the remaining sites.
+        """
         none_idx = [sites for sites in elbos if sites is None]
         assert len(none_idx) <= 1
+
+        # In case the site names only contain sample sites without params,
+        # append the params to the list.
+        if append_params:
+            sample_params = get_sample_params(guide)
+            for sites in list(elbos.keys()): # Make sure to copy
+                if sites is None:
+                    continue
+                all_sites = []
+                for site in sites:
+                    all_sites.append(site)
+                    all_sites.extend(sample_params.get(site, []))
+                elbo = elbos.pop(sites)
+                elbos[tuple(all_sites)] = elbo
+        
+        # Just return if no sites are unspecified.
         if len(none_idx) == 0:
             return MultiELBO(elbos)
+
+        # Infer remaining sites
         given_sites = tuple(site for sites in elbos for site in (sites or []))
         sites = tuple(set([
             site
