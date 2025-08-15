@@ -200,9 +200,10 @@ class TrainerSVI(TrainerMixin):
                     exclude_deterministic=False)
                 return pred(random.key(seed))
             case 'posterior':
-                keys = random.split(random.key(seed), num_samples)
-                samples = {site: self.posterior(site).sample(key, (num_samples,))
-                           for key, (site, node) in zip(keys, self.trace_guide().items())
+                key = random.key(seed)
+                samples = {site: self.posterior(site).sample((key:=random.split(key)[1]),
+                                                             (num_samples,))
+                           for site, node in self.trace_guide().items()
                            if node['type'] in ['sample', 'deterministic']}
                 return samples
 
