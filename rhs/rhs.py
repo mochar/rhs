@@ -1,12 +1,12 @@
 import re
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, Callable
 
 import dill
 import numpyro
 import numpyro.distributions as dist
 from numpyro import handlers
-from numpyro.infer import MCMC, NUTS
+from numpyro.infer import MCMC, NUTS, Trace_ELBO, TraceMeanField_ELBO
 from numpyro.infer.mcmc import MCMCKernel
 from numpyro.infer.svi import SVIState
 import jax.numpy as jnp
@@ -18,6 +18,8 @@ from .dist import *
 from .common import TraceType
 from .model import Configuration, to_reg_lambda
 from .model import GuideUnstructured, GuidePairCond, GuidePairMv, GuidePairCondCorr
+from .utils import get_sample_params
+from .elbo import MultiELBO
 
 
 @dataclass
@@ -69,6 +71,7 @@ class TrainerMCMC(TrainerMixin):
         self.samples = self.mcmc.get_samples()
         self.diverging = self.mcmc._states['diverging'][0]
         self.estimates = {site: samples.mean(0) for site, samples in self.samples.items()}
+
 
 @dataclass
 class TrainerSVI(TrainerMixin):

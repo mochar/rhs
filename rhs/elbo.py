@@ -42,7 +42,7 @@ class MultiELBO(ELBO):
                     all_sites.append(site)
                     all_sites.extend(sample_params.get(site, []))
                 elbo = elbos.pop(sites)
-                elbos[tuple(all_sites)] = elbo
+                elbos[tuple(set(all_sites))] = elbo
         
         # Just return if no sites are unspecified.
         if len(none_idx) == 0:
@@ -68,7 +68,10 @@ class MultiELBO(ELBO):
         guide,
         *args,
         **kwargs,
-    ):        
+    ):
+        """Wraps the original methods but masks the sites that are not included
+        in each elbo's specification.
+        """
         loss_data = {'loss': jnp.array(0.0), 'mutable_state': None}
         for sites, elbo in self.elbos.items():
             elbo_model = site_mask(model, sites, reverse=True)

@@ -47,8 +47,10 @@ class TestMultiELBO():
         }
         elbo_multi = MultiELBO.build(elbos, model, AutoNormal(model), append_params=True)
         sites = list(elbo_multi.elbos.keys())
+        assert len(sites[0]) == 6
         assert set(sites[0]) == {'a', 'a_auto_loc', 'a_auto_scale',
                                  'b', 'b_auto_loc', 'b_auto_scale'}
+        assert len(sites[1]) == 3
         assert set(sites[1]) == {'c', 'c_auto_loc', 'c_auto_scale'}
         
     def test_loss_same(self):

@@ -25,7 +25,7 @@ def normal_site(name, inits: dict[str, Any], log: bool = False) -> tuple[ArrayLi
     D = dist.LogNormal if log else dist.Normal
     return numpyro.sample(name, D(loc, scale)), loc, scale
 
-def lognormal_site(name, inits: dict[str, Any], log: bool = False) -> tuple[ArrayLike, ArrayLike, ArrayLike]:
+def lognormal_site(name, inits: dict[str, Any]) -> tuple[ArrayLike, ArrayLike, ArrayLike]:
     return normal_site(name, inits, log=True)
 
 def to_reg_lambda(tau2, lambda2, c2):
@@ -363,9 +363,14 @@ class GuidePairCondCorr(GuidePairCond):
     Same as GuidePairCond, but model the dependencies of the resulting coefs as a
     multivariate normal.
     """
-    name = 'paircondcorr'
-
     low_rank_factor: int | None = None
+
+    @property
+    def name(self):
+        suffix = ''
+        if self.low_rank_factor:
+            suffix = f'_{self.low_rank_factor}'
+        return f'paircondcorr{suffix}'
     
     def guide(self, D: int, reparam: Reparam, coef_decentered: bool, tau: ArrayLike, c: ArrayLike, inits: dict[str, Any]):
         coef_name = 'coef' + ('_dec' if coef_decentered else '')
@@ -483,6 +488,7 @@ class Configuration:
     tau_scale: float
     c_df: float
     c_scale: float
+    noise_scale: float = 1.
     N: int = field(init=False)
     D: int = field(init=False)
     model: Callable = field(init=False)
@@ -496,7 +502,7 @@ class Configuration:
 
         # Model
         def model():
-            noise = numpyro.sample('noise', dist.Exponential(1.))
+            noise = numpyro.sample('noise', dist.Exponential(self.noise_scale))
             c2_aux = numpyro.sample('c2_aux', dist.InverseGamma(self.c_df*0.5, self.c_df*0.5))
             c = numpyro.deterministic('c', self.c_scale * jnp.sqrt(c2_aux))
 
