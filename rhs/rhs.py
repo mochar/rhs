@@ -207,3 +207,33 @@ class TrainerSVI(TrainerMixin):
                            if node['type'] in ['sample', 'deterministic']}
                 return samples
 
+    @staticmethod
+    def build_specialized_elbo(
+        conf: Configuration,
+        num_particles: int = 1,
+        reparam_only: bool = True
+    ) -> MultiELBO | Trace_ELBO:
+        """ELBO where half-cauchy priors tau and lambda use the `TraceMeanField`
+        ELBO.
+
+        This is useful because when the half-cauchy prior is decomposed into
+        gamma, and inverse-gamma distributions, the KL-divergence to the
+        lognormal posterior is closed-form, which `TraceMeanField` can take
+        advantage of.
+        """
+        if reparam_only and conf.reparam is None:
+            return Trace_ELBO(num_particles)
+        
+        sample_params = get_sample_params(conf.guide)
+        half_cauchy_sites = []
+        for site, params in sample_params.items():
+            if site.split('_')[0] in ['lambda', 'tau']:
+                half_cauchy_sites.extend([site, *params])
+        half_cauchy_sites = tuple(half_cauchy_sites)
+        
+        elbos = {
+            half_cauchy_sites: TraceMeanField_ELBO(num_particles),
+            None: Trace_ELBO(num_particles)
+        }
+        multi_elbo = MultiELBO.build(elbos, conf.model, conf.guide)
+        return multi_elbo
