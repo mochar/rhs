@@ -337,7 +337,7 @@ class GuidePairCond:
             lambda_coef_corr = numpyro.param(
                 'corrs.lambda_coef', 
                 # lambda _: inits.get('corrs.lambda_coef', jnp.zeros(lambda_.shape)),
-                inits.get('corrs.lambda_coef', jnp.zeros(lambda_.shape)),
+                inits.get('corrs.lambda_coef', jnp.zeros(D)),
                 constraint=dist.constraints.interval(-1., 1.))
 
             coef_name = 'coef' + ('_dec' if coef_decentered else '')
@@ -347,7 +347,8 @@ class GuidePairCond:
                 inits[f'scales.{coef_name}'],
                 constraint=pos_const)
     
-            coef_loc_cond, coef_scale_cond = self._posterior_coef(lambda_, lambda_loc, lambda_scale, coef_loc, coef_scale, lambda_coef_corr)
+            coef_loc_cond, coef_scale_cond = self._posterior_coef(
+                lambda_, lambda_loc, lambda_scale, coef_loc, coef_scale, lambda_coef_corr)
             coef_dist = dist.Normal(coef_loc_cond, coef_scale_cond)
             
             if coef_decentered:
