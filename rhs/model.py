@@ -42,12 +42,12 @@ class ReparamII:
     @property
     def name(self) -> str:
         if self.dec1 and self.dec2:
-            return 'ii_dec'
+            return 'ii:dec'
         if self.dec1:
-            return 'ii_dec1'
+            return 'ii:dec1'
         if self.dec2:
-            return 'ii_dec2'
-        return 'ii_cen'
+            return 'ii:dec2'
+        return 'ii:cen'
 
     def model(self, name: str, scale) -> ArrayLike:
         if self.dec1:
@@ -168,7 +168,7 @@ class ReparamIG:
 
     @property
     def name(self) -> str:
-        return 'ig_dec' if self.dec else 'ig_cen'
+        return 'ig:dec' if self.dec else 'ig:cen'
 
     def model(self, name: str, scale) -> ArrayLike:
         if self.dec:
