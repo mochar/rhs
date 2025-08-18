@@ -483,7 +483,8 @@ GuideStructure = GuideUnstructured | GuidePairCond | GuidePairMv | GuideFullMatr
 class Configuration:
     X: ArrayLike
     Y: ArrayLike
-    reparam: Reparam
+    reparam_tau: Reparam
+    reparam_lambda: Reparam
     structure: GuideStructure
     coef_dec: bool
     tau_scale: float
@@ -507,16 +508,16 @@ class Configuration:
             c2_aux = numpyro.sample('c2_aux', dist.InverseGamma(self.c_df*0.5, self.c_df*0.5))
             c = numpyro.deterministic('c', self.c_scale * jnp.sqrt(c2_aux))
 
-            if self.reparam is None:
+            if self.reparam_tau is None:
                 tau = numpyro.sample('tau', dist.HalfCauchy(scale=self.tau_scale))
             else:
-                tau = self.reparam.model('tau', self.tau_scale)
+                tau = self.reparam_tau.model('tau', self.tau_scale)
 
             with numpyro.plate('d', self.D):
-                if self.reparam is None:
+                if self.reparam_lambda is None:
                     lambda_ = numpyro.sample('lambda', dist.HalfCauchy(scale=1.))
                 else:
-                    lambda_ = self.reparam.model('lambda', 1.)
+                    lambda_ = self.reparam_lambda.model('lambda', 1.)
                     
                 lambda_reg = numpyro.deterministic('lambda_reg', to_reg_lambda(tau**2, lambda_**2, c*c))
 
@@ -540,19 +541,20 @@ class Configuration:
             c2_aux, *_ = lognormal_site('c2_aux', self.inits)
             c = self.c_scale * jnp.sqrt(c2_aux)
 
-            if self.reparam:
-                tau, *_ = self.reparam.guide('tau', self.tau_scale, self.inits)
+            if self.reparam_tau:
+                tau, *_ = self.reparam_tau.guide('tau', self.tau_scale, self.inits)
             else:
                 tau, *_ = lognormal_site('tau', self.inits)
 
-            self.structure.guide(self.D, self.reparam, self.coef_dec, tau, c, self.inits)
+            self.structure.guide(self.D, self.reparam_lambda, self.coef_dec, tau, c, self.inits)
 
         self.guide = guide
 
     @property
     def name(self):
-        reparam_name = self.reparam.name if self.reparam else 'base'
-        return f'{self.structure.name}_{reparam_name}'
+        tau_reparam_name = self.reparam_tau.name if self.reparam_tau else 'base'
+        lambda_reparam_name = self.reparam_lambda.name if self.reparam_lambda else 'base'
+        return f'{self.structure.name}_{tau_reparam_name}_{lambda_reparam_name}'
 
     def make_inits(self) -> dict[str, Any]:
         t = handlers.trace(handlers.seed(self.model, 0)).get_trace()

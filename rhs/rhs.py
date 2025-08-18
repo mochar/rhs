@@ -167,10 +167,12 @@ class TrainerSVI(TrainerMixin):
                 return dist.LogNormal(
                     self.params['locs.lambda'],
                     self.params['scales.lambda'])
-            case _ if self.conf.reparam and (match := re.match(r'^(tau|lambda)', site)):
-                name = match[0]
-                scale = self.conf.tau_scale if name == 'tau' else 1.
-                return self.conf.reparam.posterior(trace, site, name, scale)
+            case _ if self.conf.reparam_tau and site.startswith('tau'):
+                scale = self.conf.tau_scale
+                return self.conf.reparam_tau.posterior(trace, site, 'tau', scale)
+            case _ if self.conf.reparam_lambda and site.startswith('lambda'):
+                scale = 1.
+                return self.conf.reparam_lambda.posterior(trace, site, 'lambda', scale)
             case _:
                 return trace[site].get('fn')
         
@@ -221,7 +223,8 @@ class TrainerSVI(TrainerMixin):
         lognormal posterior is closed-form, which `TraceMeanField` can take
         advantage of.
         """
-        if reparam_only and conf.reparam is None:
+        # TODO Handle reparam tau and lambda cases seperately
+        if reparam_only and conf.reparam_tau is None and conf.reparam_lambda is None:
             return Trace_ELBO(num_particles)
         
         sample_params = get_sample_params(conf.guide)
