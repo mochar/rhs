@@ -8,6 +8,7 @@ import jax
 import tqdm
 import numpy as np
 import dill
+import numpyro
 
 import rhs
 
@@ -17,44 +18,70 @@ OUT_PATH = Path('./output/')
 OUT_PATH.mkdir(exist_ok=True)
 
 dataset = rhs.datasets.TestDataset(B_k=np.array([2.0, -1.0, 1.]))
-dataset = rhs.datasets.TestDataset(B_k=np.array([6., 6., 6.]), correlated=True)
+dataset = rhs.datasets.TestDataset(
+    B_k=np.array([3., 3., 3.]), correlated=False, x_std=.5)
+# dataset = rhs.datasets.TestDataset(
+    # D_per=30, B_k=np.array([3., 3., 3.]), correlated=.9, x_std=.5)
 with open(OUT_PATH / 'dataset.pkl', 'wb') as f:
     dill.dump(dataset, f)
 tau_scale = dataset.tau_scale
-print('Tau scale:', tau_scale)
+num_particles = 10
 
 reparams = {
     'base': None,
-    'ig_cen': rhs.ReparamIG(dec=False),
-    'ig_dec': rhs.ReparamIG(dec=True),
-    'ii_cen': rhs.ReparamII(dec1=False, dec2=False),
-    'ii_dec1': rhs.ReparamII(dec1=True, dec2=False),
-    'ii_dec2': rhs.ReparamII(dec1=False, dec2=True),
-    'ii_dec': rhs.ReparamII(dec1=True, dec2=True)
+    **{reparam.name: reparam
+       for reparam in [
+               rhs.ReparamIG(dec=False),
+               rhs.ReparamIG(dec=True),
+               rhs.ReparamII(dec1=False, dec2=False),
+               rhs.ReparamII(dec1=True, dec2=False),
+               rhs.ReparamII(dec1=False, dec2=True),
+               rhs.ReparamII(dec1=True, dec2=True)
+    ]}
+}
+structures = {
+    structure.name: structure
+    for structure in [
+            rhs.GuideUnstructured(),
+            # rhs.GuidePairCond(),
+            # rhs.GuidePairCondCorr(),
+            # rhs.GuidePairCondCorr(3)
+    ]
 }
 configs = {
-    name: rhs.Configuration(dataset.X, dataset.Y, reparam,
-                            # structure=rhs.GuideUnstructured(),
-                            structure=rhs.GuideStructured(),
-                            coef_dec=False,
-                            tau_scale=tau_scale, c_df=5., c_scale=3.)
-    for name, reparam in reparams.items()
+    f'{reparam_tau_name}_{reparam_lambda_name}-{structure_name}': rhs.Configuration(
+        dataset.X, dataset.Y,
+        reparam_tau=reparams[reparam_tau_name],
+        reparam_lambda=reparams[reparam_lambda_name],
+        structure=structure,
+        coef_dec=True,
+        tau_scale=tau_scale,
+        c_df=3., c_scale=3.)
+    for structure_name, structure in structures.items()
+    for reparam_type in ['ii', 'ig']
+    for reparam_tau_name in [r for r in reparams if r.startswith(reparam_type)]
+    for reparam_lambda_name in [r for r in reparams if r.startswith(reparam_type)]
+    if (reparam_name:=f'{reparam_tau_name}_{reparam_lambda_name}') in ['ig:dec_ig:dec', 'ii:dec_ii:dec2', 'ig:cen_ig:dec', 'ii:dec_ii:dec', 'ig:dec_ig:cen']
 }
-
+elbos = {
+    'standard': lambda conf: numpyro.infer.Trace_ELBO(num_particles),
+    'meanfield': lambda conf: numpyro.infer.TraceMeanField_ELBO(num_particles),
+    'mix': lambda conf: rhs.TrainerSVI.build_specialized_elbo(conf, num_particles)
+}
+seeds = range(20)
 
 rule all:
     input:
-        expand(f'{OUT_PATH}/svi_{{name}}.pkl', name=configs.keys()),
-        expand(f'{OUT_PATH}/mcmc_{{name}}.pkl', name=configs.keys())
-        # expand(f'{OUT_PATH}/mcmc_{{name}}.pkl', name=['base', 'ig_dec', 'ii_dec'])
+        # expand(f'{OUT_PATH}/svi-{{seed}}-{{name}}-{{elbo}}.pkl', seed=seeds, name=configs.keys(), elbo=elbos),
+        expand(f'{OUT_PATH}/mcmc--{{seed}}--{{name}}.pkl', seed=seeds, name=configs.keys())
 
 rule svi:
     output:
-        f'{OUT_PATH}/svi_{{name}}.pkl'
+        f'{OUT_PATH}/svi_{{name}}-{{elbo}}.pkl'
     run:
         name = wildcards.name
         config = configs[name]
-        trainer = rhs.TrainerSVI(config)
+        trainer = rhs.TrainerSVI(config, elbo=elbos[wildcards.elbo](config))
         # trainer.train(10_000)
         trainer.train(30_000)
         # trainer.train(300)
@@ -62,12 +89,13 @@ rule svi:
 
 rule mcmc:
     output:
-        f'{OUT_PATH}/mcmc_{{name}}.pkl'
+        f'{OUT_PATH}/mcmc--{{seed}}--{{name}}.pkl'
     run:
         name = wildcards.name
         config = configs[name]
-        trainer = rhs.TrainerMCMC(config)
-        # trainer = rhs.TrainerMCMC(config, num_warmup=1000, num_samples=1000)
+        # trainer = rhs.TrainerMCMC(config)
+        trainer = rhs.TrainerMCMC(config, num_warmup=3000, num_samples=3000,
+                                  key=jax.random.key(int(wildcards.seed)))
         trainer.train()
         trainer.save(output[0])
 
