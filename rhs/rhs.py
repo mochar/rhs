@@ -6,7 +6,7 @@ import dill
 import numpyro
 import numpyro.distributions as dist
 from numpyro import handlers
-from numpyro.infer import MCMC, NUTS, Trace_ELBO, TraceMeanField_ELBO
+from numpyro.infer import MCMC, HMC, NUTS, Trace_ELBO, TraceMeanField_ELBO
 from numpyro.infer.mcmc import MCMCKernel
 from numpyro.infer.svi import SVIState
 import jax.numpy as jnp
@@ -139,21 +139,26 @@ class TrainerSVI(TrainerMixin):
             case 'coef':
                 lambda_post = self.posterior('lambda')
                 lambda_ = self.estimate(lambda_post)
-                
+
                 match self.conf.structure:
                     case GuideUnstructured():
-                        coef = trace[self.conf.coef_name]['fn']
+                        coef = trace[self.conf.coef_name]["fn"]
                     case GuidePairCond() | GuidePairMv() | GuidePairCondCorr():
                         coef_marginal = dist.Normal(
-                            self.params[f'locs.{self.conf.coef_name}'],
-                            self.params[f'scales.{self.conf.coef_name}'])
-                        corr = self.params['corrs.lambda_coef']
+                            self.params[f"locs.{self.conf.coef_name}"],
+                            self.params[f"scales.{self.conf.coef_name}"],
+                        )
+                        corr = self.params["corrs.lambda_coef"]
                         loc, scale = GuidePairCond._posterior_coef(
                             # None,
                             lambda_,
                             # lambda_post.mean,
-                            lambda_post.loc, lambda_post.scale,
-                            coef_marginal.loc, coef_marginal.scale, corr)
+                            lambda_post.loc,
+                            lambda_post.scale,
+                            coef_marginal.loc,
+                            coef_marginal.scale,
+                            corr,
+                        )
                         coef = dist.Normal(loc, scale)
 
                 if not self.conf.coef_dec:

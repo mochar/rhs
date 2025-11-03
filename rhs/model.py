@@ -173,7 +173,7 @@ class ReparamIG:
     def model(self, name: str, scale) -> ArrayLike:
         if self.dec:
             aux1 = numpyro.sample(f'{name}_aux1', dist.InverseGamma(0.5, 1.))
-            aux2_dec = numpyro.sample(f'{name}_aux2_dec', dist.Gamma(0.5, 1.)) 
+            aux2_dec = numpyro.sample(f"{name}_aux2_dec", dist.Gamma(0.5, 1.0)) 
             aux2 = numpyro.deterministic(f'{name}_aux2', aux2_dec * scale * scale)
             return numpyro.deterministic(name, jnp.sqrt(aux1 * aux2_dec) * scale)
         else:
@@ -225,7 +225,7 @@ class ReparamIG:
 # ** Type
 Reparam = None | ReparamII | ReparamIG
 
-# * Structured guide
+# * Guide
 
 # ** Unstructured
 @dataclass

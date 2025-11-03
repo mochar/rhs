@@ -9,6 +9,9 @@ from .utils import get_sample_params
 
 
 class MultiELBO(ELBO):
+    """
+    Numpyro ELBO where different ELBO can be used for different sites.
+    """
     def __init__(self, elbos: dict[tuple, ELBO]):
         self.elbos = elbos
 
