@@ -5,10 +5,14 @@
 
 * Regularized horseshoe prior experiments
 
-I implement regularized horseshoe priors in numpyro and train it with variational inference and MCMC. The main objective is to compare variations of the model:
+Sparsifying priors such as the horseshoe are normally used when there are many features, but only some are predictive. What happens when most features are predictive, but also redundant? Ideally we'd like a sparse solution; a minimal number of features have a non-zero coefficient. [cite:@piironen_projective_2020]
+
+To explore this I implement regularized horseshoe priors in numpyro and train it with variational inference and MCMC with different variations of the model:
 
 - Guide structure :: Model correlations between coefficient and its local sparsity parameter
 - Reparamerization :: Factorize half-cauchy prior into gamma and inverse-gamma distributions
+
+The resutls are discussed on my website.
 
 ** Reparameterizations
 The global and feature-local sparsity parameters are modeled as half-Cauchy distributions in the prior. Standard exponential family variational approximations struggle to capture the thick Cauchy tails, and using Cauchy approximating family leads to high variance gradients. This can challenge inference and is therefore proposed to be factorized into Gamma and inverse-Gamma distributions.
