@@ -16,8 +16,9 @@ import optax
 
 from .dist import *
 from .common import TraceType
-from .model import Configuration, to_reg_lambda
-from .model import GuideUnstructured, GuidePairCond, GuidePairMv, GuidePairCondCorr
+from .configuration import Configuration
+from .common import to_reg_lambda
+from .guide import GuideUnstructured, GuidePairCond, GuidePairMv, GuidePairCondCorr
 from .utils import get_sample_params
 from .elbo import MultiELBO
 
