@@ -1,1 +1,22 @@
+#+bibliography: ~/ilm/main/refs.bib
+#+cite_export: csl nature.csl
+
 * Regularized horseshoe prior experiments
+
+I implement regularized horseshoe priors in numpyro and train it with variational inference and MCMC. The main objective is to compare variations of the model:
+
+- Guide structure :: Model correlations between coefficient and its local sparsity parameter
+- Reparamerization :: Factorize half-cauchy prior into gamma and inverse-gamma distributions
+
+** Guide structures 
+
+** Reparameterizations
+The global and feature-local sparsity parameters are modeled as Half-Cauchy distributions in the prior. This can challenge inference and is therefore proposed to be factorized into two seperate distributions.
+
+*** InverseGamma-Gamma 
+
+*** InverseGamma-InverseGamma
+[cite:@oh_radial_2019]
+
+** References
+#+PRINT_BIBLIOGRAPHY:
