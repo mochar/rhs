@@ -1,6 +1,7 @@
 #+bibliography: ~/ilm/main/refs.bib
 # #+CITATION_STYLE: csl nature.csl
 #+cite_export: csl nature.csl
+#+OPTIONS: toc:nil
 
 * Regularized horseshoe prior experiments
 
