@@ -20,16 +20,16 @@ In variational inference, the advantage is that the KL-divergence between a (inv
 ** InverseGamma-Gamma 
 The square of half-Cauchy \(\mathcal{C}^+\) is equal in distribution to a product of Gamma and inverse-Gamma. [cite:@oh_radial_2019] [cite:@louizos_bayesian_2017]
 
-If \( z \sim \mathcal{C}^+(k) \), then 
+If \(z \sim \mathcal{C}^+(k)\), then 
 
-\( \sqrt{z} = \alpha\beta \), where
+\(\sqrt{z} = \alpha\beta\), where
 
-\( \alpha \sim \mathcal{G}(\frac{1}{2},k^2), \beta \sim \mathcal{IG}(\frac{1}{2},1) \)
+\(\alpha \sim \mathcal{G}(\frac{1}{2},k^2), \beta \sim \mathcal{IG}(\frac{1}{2},1)\)
 
 ** InverseGamma-InverseGamma
 The square of half-Cauchy \(\mathcal{C}^+\) is a result of sampling successively from two inverse-Gamma distributions. [cite:@neville_mean_2014] [cite:@ghosh_model_2019]
 
-If \( z \sim \mathcal{C}^+(k) \), then 
+If \(z \sim \mathcal{C}^+(k)\), then 
 
 \begin{align*}
 a &\sim \text{InvGamma}(\frac{1}{2}, \frac{1}{k^2}) \\
