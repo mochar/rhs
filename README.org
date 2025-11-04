@@ -10,9 +10,22 @@ I implement regularized horseshoe priors in numpyro and train it with variationa
 - Reparamerization :: Factorize half-cauchy prior into gamma and inverse-gamma distributions
 
 ** Guide structures 
+There exists a tight coupling between the coefficient and its horseshoe determined variance. Mean-field variational posterior will fail to capture this covariance. [cite:@louizos_bayesian_2017] Therefore different structured guide have been implemented:
+
+- Paired multivariate normal :: Model each coeffcient-lambda pair as a multivariate normal.
+\begin{align*}
+(\lambda_d, \theta_d) \sim \text{MvNormal}()
+\end{align*}
+- Paired conditional multivariate normal :: Same but in conditional form.
+\begin{align*}
+\lambda_d &\sim \text{Normal}() \\ 
+\theta_d | \lambda_d &\sim \text{Normal}()
+\end{align*}
+- Paired correlated :: ???
+- Full :: Model the entire coefficient-lambda pair matrix with a matrix normal.
 
 ** Reparameterizations
-The global and feature-local sparsity parameters are modeled as half-Cauchy distributions in the prior. This can challenge inference and is therefore proposed to be factorized into Gamma and inverse-Gamma distributions.
+The global and feature-local sparsity parameters are modeled as half-Cauchy distributions in the prior. Standard exponential family variational approximations struggle to capture the thick Cauchy tails, and using Cauchy approximating family leads to high variance gradients. This can challenge inference and is therefore proposed to be factorized into Gamma and inverse-Gamma distributions.
 
 In variational inference, the advantage is that the KL-divergence between a (inverse) gamma and a log-normal distribution is closed-form. The log-normal distribution can therefore be used as a variational posterior leading to lower variance gradients. In Pyro, we can use ~MeanFieldELBO~ to use the closed-form solution.
 
