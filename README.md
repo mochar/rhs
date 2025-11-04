@@ -1,5 +1,3 @@
-# Regularized horseshoe prior experiments
-
 Sparsifying priors such as the horseshoe are normally used when there are many features, but only some are predictive. What happens when most features are predictive, but also redundant? Ideally we'd like a sparse solution; a minimal number of features have a non-zero coefficient.<sup><a href="#citeproc_bib_item_1">1</a></sup>
 
 To explore this I implement regularized horseshoe priors in numpyro and train it with variational inference and MCMC with different variations of the model:
@@ -10,14 +8,14 @@ To explore this I implement regularized horseshoe priors in numpyro and train it
 The resutls are discussed on my website.
 
 
-## Reparameterizations
+# Reparameterizations
 
 The global and feature-local sparsity parameters are modeled as half-Cauchy distributions in the prior. Standard exponential family variational approximations struggle to capture the thick Cauchy tails, and using Cauchy approximating family leads to high variance gradients. This can challenge inference and is therefore proposed to be factorized into Gamma and inverse-Gamma distributions.
 
 In variational inference, the advantage is that the KL-divergence between a (inverse) gamma and a log-normal distribution is closed-form. The log-normal distribution can therefore be used as a variational posterior leading to lower variance gradients. In Pyro, we can use `MeanFieldELBO` to use the closed-form solution.
 
 
-### InverseGamma-Gamma
+## InverseGamma-Gamma
 
 The square of half-Cauchy $\mathcal{C}^+$ is equal in distribution to a product of Gamma and inverse-Gamma.<sup><a href="#citeproc_bib_item_2">2</a></sup><sup><a href="#citeproc_bib_item_3">3</a></sup>
 
@@ -28,7 +26,7 @@ $ \sqrt{z} = \alpha\beta $, where
 $ \alpha \sim \mathcal{G}(\frac{1}{2},k^2), \beta \sim \mathcal{IG}(\frac{1}{2},1) $
 
 
-### InverseGamma-InverseGamma
+## InverseGamma-InverseGamma
 
 The square of half-Cauchy $\mathcal{C}^+$ is a result of sampling successively from two inverse-Gamma distributions.<sup><a href="#citeproc_bib_item_4">4</a></sup><sup><a href="#citeproc_bib_item_5">5</a></sup>
 
@@ -40,7 +38,7 @@ z^2 &\sim \text{InvGamma}(\frac{1}{2}, \frac{1}{a})
 \end{align*}
 
 
-## Guide structures
+# Guide structures
 
 There exists a tight coupling between the coefficient and its horseshoe determined variance. Mean-field variational posterior will fail to capture this covariance.<sup><a href="#citeproc_bib_item_3">3</a></sup> Therefore different structured guide have been implemented:
 
@@ -65,7 +63,7 @@ Since $\lambda$ is now univariate, we can calculate its KL-divergence directly t
 -   **Full:** Model the entire coefficient-lambda pair matrix with a matrix normal.
 
 
-## References
+# References
 
 <style>.csl-left-margin{float: left; padding-right: 0em;}
  .csl-right-inline{margin: 0 0 0 1em;}</style><div class="csl-bib-body">
