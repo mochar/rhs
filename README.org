@@ -1,4 +1,5 @@
 #+bibliography: ~/ilm/main/refs.bib
+# #+CITATION_STYLE: csl nature.csl
 #+cite_export: csl nature.csl
 
 * Regularized horseshoe prior experiments
@@ -11,12 +12,29 @@ I implement regularized horseshoe priors in numpyro and train it with variationa
 ** Guide structures 
 
 ** Reparameterizations
-The global and feature-local sparsity parameters are modeled as Half-Cauchy distributions in the prior. This can challenge inference and is therefore proposed to be factorized into two seperate distributions.
+The global and feature-local sparsity parameters are modeled as half-Cauchy distributions in the prior. This can challenge inference and is therefore proposed to be factorized into Gamma and inverse-Gamma distributions.
+
+In variational inference, the advantage is that the KL-divergence between a (inverse) gamma and a log-normal distribution is closed-form. The log-normal distribution can therefore be used as a variational posterior leading to lower variance gradients. In Pyro, we can use ~MeanFieldELBO~ to use the closed-form solution.
 
 *** InverseGamma-Gamma 
+The square of half-Cauchy \(\mathcal{C}^+\) is equal in distribution to a product of Gamma and inverse-Gamma. [cite:@oh_radial_2019] [cite:@louizos_bayesian_2017]
+
+If \( z \sim \mathcal{C}^+(k) \), then 
+
+\( \sqrt{z} = \alpha\beta \), where
+
+\( \alpha \sim \mathcal{G}(\frac{1}{2},k^2), \beta \sim \mathcal{IG}(\frac{1}{2},1) \)
 
 *** InverseGamma-InverseGamma
-[cite:@oh_radial_2019]
+The square of half-Cauchy \(\mathcal{C}^+\) is a result of sampling successively from two inverse-Gamma distributions. [cite:@neville_mean_2014] [cite:@ghosh_model_2019]
+
+If \( z \sim \mathcal{C}^+(k) \), then 
+
+\begin{align*}
+a &\sim \text{InvGamma}(\frac{1}{2}, \frac{1}{k^2}) \\
+z^2 &\sim \text{InvGamma}(\frac{1}{2}, \frac{1}{a})
+\end{align*}
+
 
 ** References
 #+PRINT_BIBLIOGRAPHY:
