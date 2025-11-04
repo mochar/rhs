@@ -10,21 +10,6 @@ I implement regularized horseshoe priors in numpyro and train it with variationa
 - Guide structure :: Model correlations between coefficient and its local sparsity parameter
 - Reparamerization :: Factorize half-cauchy prior into gamma and inverse-gamma distributions
 
-** Guide structures 
-There exists a tight coupling between the coefficient and its horseshoe determined variance. Mean-field variational posterior will fail to capture this covariance. [cite:@louizos_bayesian_2017] Therefore different structured guide have been implemented:
-
-- Paired multivariate normal :: Model each coeffcient-lambda pair as a multivariate normal.
-\begin{align*}
-(\lambda_d, \theta_d) \sim \text{MvNormal}()
-\end{align*}
-- Paired conditional multivariate normal :: Same but in conditional form.
-\begin{align*}
-\lambda_d &\sim \text{Normal}() \\ 
-\theta_d | \lambda_d &\sim \text{Normal}()
-\end{align*}
-- Paired correlated :: ???
-- Full :: Model the entire coefficient-lambda pair matrix with a matrix normal.
-
 ** Reparameterizations
 The global and feature-local sparsity parameters are modeled as half-Cauchy distributions in the prior. Standard exponential family variational approximations struggle to capture the thick Cauchy tails, and using Cauchy approximating family leads to high variance gradients. This can challenge inference and is therefore proposed to be factorized into Gamma and inverse-Gamma distributions.
 
@@ -49,6 +34,23 @@ a &\sim \text{InvGamma}(\frac{1}{2}, \frac{1}{k^2}) \\
 z^2 &\sim \text{InvGamma}(\frac{1}{2}, \frac{1}{a})
 \end{align*}
 
+
+** Guide structures 
+There exists a tight coupling between the coefficient and its horseshoe determined variance. Mean-field variational posterior will fail to capture this covariance. [cite:@louizos_bayesian_2017] Therefore different structured guide have been implemented:
+
+- Paired multivariate normal :: Model each coeffcient-lambda pair as a multivariate normal.
+\begin{align*}
+(\hat{\lambda}_d, \theta_d) \sim \text{MvNormal}()
+\end{align*}
+  Note that \(\hat{\lambda} = \ln \lambda\) as \(\lambda\) is positive.
+- Paired conditional multivariate normal :: Same but in [[https://en.wikipedia.org/wiki/Multivariate_normal_distribution#Conditional_distributions][conditional form]].
+\begin{align*}
+\lambda_d &\sim \text{LogNormal}() \\ 
+\theta_d | \lambda_d &\sim \text{Normal}()
+\end{align*}
+  Since \(\lambda\) is now univariate, we can calculate its KL-divergence directly to its prior using the gamma reparameterization.
+- Paired correlated :: ???
+- Full :: Model the entire coefficient-lambda pair matrix with a matrix normal.
 
 ** References
 #+PRINT_BIBLIOGRAPHY:
