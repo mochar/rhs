@@ -1,16 +1,13 @@
-
-# Table of Contents
-
-1.  [Regularized horseshoe prior experiments](#orgfff4b72)
-    1.  [Guide structures](#org3fec5e6)
-    2.  [Reparameterizations](#orgf7ebcc0)
-        1.  [InverseGamma-Gamma](#orgc2fb5a2)
-        2.  [InverseGamma-InverseGamma](#org659319d)
-    3.  [References](#org945c53c)
+- [Regularized horseshoe prior experiments](#orgcd82a45)
+  - [Guide structures](#org497512b)
+  - [Reparameterizations](#orgcc817a2)
+    - [InverseGamma-Gamma](#org65f6942)
+    - [InverseGamma-InverseGamma](#org3987286)
+  - [References](#orgc070a3d)
 
 
 
-<a id="orgfff4b72"></a>
+<a id="orgcd82a45"></a>
 
 # Regularized horseshoe prior experiments
 
@@ -20,12 +17,12 @@ I implement regularized horseshoe priors in numpyro and train it with variationa
 -   **Reparamerization:** Factorize half-cauchy prior into gamma and inverse-gamma distributions
 
 
-<a id="org3fec5e6"></a>
+<a id="org497512b"></a>
 
 ## Guide structures
 
 
-<a id="orgf7ebcc0"></a>
+<a id="orgcc817a2"></a>
 
 ## Reparameterizations
 
@@ -34,26 +31,26 @@ The global and feature-local sparsity parameters are modeled as half-Cauchy dist
 In variational inference, the advantage is that the KL-divergence between a (inverse) gamma and a log-normal distribution is closed-form. The log-normal distribution can therefore be used as a variational posterior leading to lower variance gradients. In Pyro, we can use `MeanFieldELBO` to use the closed-form solution.
 
 
-<a id="orgc2fb5a2"></a>
+<a id="org65f6942"></a>
 
 ### InverseGamma-Gamma
 
 The square of half-Cauchy $\mathcal{C}^+$ is equal in distribution to a product of Gamma and inverse-Gamma.<sup><a href="#citeproc_bib_item_1">1</a></sup><sup><a href="#citeproc_bib_item_2">2</a></sup>
 
-If $ z \sim \mathcal{C}^+(k) $, then 
+If $ z \sim \mathcal{C}^+(k) $, then
 
 $ \sqrt{z} = \alpha\beta $, where
 
 $ \alpha \sim \mathcal{G}(\frac{1}{2},k^2), \beta \sim \mathcal{IG}(\frac{1}{2},1) $
 
 
-<a id="org659319d"></a>
+<a id="org3987286"></a>
 
 ### InverseGamma-InverseGamma
 
 The square of half-Cauchy $\mathcal{C}^+$ is a result of sampling successively from two inverse-Gamma distributions.<sup><a href="#citeproc_bib_item_3">3</a></sup><sup><a href="#citeproc_bib_item_4">4</a></sup>
 
-If $ z \sim \mathcal{C}^+(k) $, then 
+If $ z \sim \mathcal{C}^+(k) $, then
 
 \begin{align*}
 a &\sim \text{InvGamma}(\frac{1}{2}, \frac{1}{k^2}) \\
@@ -61,7 +58,7 @@ z^2 &\sim \text{InvGamma}(\frac{1}{2}, \frac{1}{a})
 \end{align*}
 
 
-<a id="org945c53c"></a>
+<a id="orgc070a3d"></a>
 
 ## References
 
@@ -80,4 +77,3 @@ z^2 &\sim \text{InvGamma}(\frac{1}{2}, \frac{1}{a})
     <div class="csl-left-margin">4.</div><div class="csl-right-inline">Ghosh, S., Yao, J. &#38; Doshi-Velez, F. <a href="http://jmlr.org/papers/v20/19-236.html">Model selection in bayesian neural networks via horseshoe priors</a>. <i>Journal of machine learning research</i> <b>20</b>, 1–46 (2019).</div>
   </div>
 </div>
-
