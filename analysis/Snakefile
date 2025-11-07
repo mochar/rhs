@@ -11,91 +11,83 @@ import dill
 import numpyro
 
 import rhs
+from experiments import Experiment, REPARAMS, STRUCTURES, ELBOS
 
 jax.config.update('jax_platform_name', 'cpu')
 
 OUT_PATH = Path('./output/')
 OUT_PATH.mkdir(exist_ok=True)
 
-dataset = rhs.datasets.TestDataset(B_k=np.array([2.0, -1.0, 1.]))
-dataset = rhs.datasets.TestDataset(
-    B_k=np.array([3., 3., 3.]), correlated=False, x_std=.5)
-# dataset = rhs.datasets.TestDataset(
-    # D_per=30, B_k=np.array([3., 3., 3.]), correlated=.9, x_std=.5)
-with open(OUT_PATH / 'dataset.pkl', 'wb') as f:
-    dill.dump(dataset, f)
-tau_scale = dataset.tau_scale
-num_particles = 10
-
-reparams = {
-    'base': None,
-    **{reparam.name: reparam
-       for reparam in [
-               rhs.ReparamIG(dec=False),
-               rhs.ReparamIG(dec=True),
-               rhs.ReparamII(dec1=False, dec2=False),
-               rhs.ReparamII(dec1=True, dec2=False),
-               rhs.ReparamII(dec1=False, dec2=True),
-               rhs.ReparamII(dec1=True, dec2=True)
-    ]}
-}
-structures = {
-    structure.name: structure
-    for structure in [
-            rhs.GuideUnstructured(),
-            # rhs.GuidePairCond(),
-            # rhs.GuidePairCondCorr(),
-            # rhs.GuidePairCondCorr(3)
-    ]
-}
-configs = {
-    f'{reparam_tau_name}_{reparam_lambda_name}-{structure_name}': rhs.Configuration(
-        dataset.X, dataset.Y,
-        reparam_tau=reparams[reparam_tau_name],
-        reparam_lambda=reparams[reparam_lambda_name],
-        structure=structure,
-        coef_dec=True,
-        tau_scale=tau_scale,
-        c_df=3., c_scale=3.)
-    for structure_name, structure in structures.items()
-    for reparam_type in ['ii', 'ig']
-    for reparam_tau_name in [r for r in reparams if r.startswith(reparam_type)]
-    for reparam_lambda_name in [r for r in reparams if r.startswith(reparam_type)]
-    if (reparam_name:=f'{reparam_tau_name}_{reparam_lambda_name}') in ['ig:dec_ig:dec', 'ii:dec_ii:dec2', 'ig:cen_ig:dec', 'ii:dec_ii:dec', 'ig:dec_ig:cen']
-}
-elbos = {
-    'standard': lambda conf: numpyro.infer.Trace_ELBO(num_particles),
-    'meanfield': lambda conf: numpyro.infer.TraceMeanField_ELBO(num_particles),
-    'mix': lambda conf: rhs.TrainerSVI.build_specialized_elbo(conf, num_particles)
-}
-seeds = range(20)
-
 rule all:
     input:
-        # expand(f'{OUT_PATH}/svi-{{seed}}-{{name}}-{{elbo}}.pkl', seed=seeds, name=configs.keys(), elbo=elbos),
-        expand(f'{OUT_PATH}/mcmc--{{seed}}--{{name}}.pkl', seed=seeds, name=configs.keys())
+        sum([
+            expand(f'{OUT_PATH}/{name}/{{dataset}}/svi--{{seed}}--{{reparam}}--{{structure}}--{{elbo}}.pkl',
+                   dataset=experiment.datasets.keys(),
+                   seed=experiment.seeds,
+                   reparam=experiment.reparams,
+                   structure=experiment.structures,
+                   elbo=experiment.elbos)
+            for name, experiment in Experiment.svi_experiments.items()
+        ], []),
+        # sum([
+            # expand(f'{OUT_PATH}/{name}/{{dataset}}/mcmc--{{seed}}--{{reparam}}.pkl',
+                   # dataset=experiment.datasets.keys(),
+                   # seed=experiment.seeds,
+                   # reparam=experiment.reparams)
+            # for name, experiment in Experiment.mcmc_experiments.items()
+        # ], [])
 
 rule svi:
     output:
-        f'{OUT_PATH}/svi_{{name}}-{{elbo}}.pkl'
+        f'{OUT_PATH}/{{experiment}}/{{dataset}}/svi--{{seed}}--{{reparam}}--{{structure}}--{{elbo}}.pkl'
     run:
-        name = wildcards.name
-        config = configs[name]
-        trainer = rhs.TrainerSVI(config, elbo=elbos[wildcards.elbo](config))
-        # trainer.train(10_000)
-        trainer.train(30_000)
-        # trainer.train(300)
+        experiment = Experiment.svi_experiments[wildcards.experiment]
+        dataset = experiment.datasets[wildcards.dataset]
+        with open(f'{OUT_PATH}/{wildcards.experiment}/{wildcards.dataset}/dataset.pkl', 'wb') as f:
+            dill.dump(dataset, f)
+        reparam_comb = wildcards.reparam
+        reparam_tau = REPARAMS[reparam_comb.split('_')[0]]
+        reparam_lambda = REPARAMS[reparam_comb.split('_')[1]]
+        config = rhs.Configuration(
+            dataset.X, dataset.Y,
+            reparam_tau=reparam_tau,
+            reparam_lambda=reparam_lambda,
+            structure=STRUCTURES[wildcards.structure],
+            coef_dec=True,
+            tau_scale=dataset.tau_scale,
+            c_df=experiment.c_df, c_scale=experiment.c_scale)
+        seed = int(wildcards.seed)
+        trainer = rhs.TrainerSVI(
+            config,
+            elbo=ELBOS[wildcards.elbo](config, int(experiment.num_particles)),
+            key=jax.random.key(seed))
+        trainer.train(experiment.iters)
         trainer.save(output[0])
-
+        
 rule mcmc:
     output:
-        f'{OUT_PATH}/mcmc--{{seed}}--{{name}}.pkl'
+        f'{OUT_PATH}/{{experiment}}/{{dataset}}/mcmc--{{seed}}--{{reparam}}.pkl'
     run:
-        name = wildcards.name
-        config = configs[name]
-        # trainer = rhs.TrainerMCMC(config)
-        trainer = rhs.TrainerMCMC(config, num_warmup=3000, num_samples=3000,
-                                  key=jax.random.key(int(wildcards.seed)))
+        experiment = Experiment.mcmc_experiments[wildcards.experiment]
+        dataset = experiment.datasets[wildcards.dataset]
+        with open(f'{OUT_PATH}/{wildcards.experiment}/{wildcards.dataset}/dataset.pkl', 'wb') as f:
+            dill.dump(dataset, f)
+        reparam_comb = wildcards.reparam
+        reparam_tau = REPARAMS[reparam_comb.split('_')[0]]
+        reparam_lambda = REPARAMS[reparam_comb.split('_')[1]]
+        config = rhs.Configuration(
+            dataset.X, dataset.Y,
+            reparam_tau=reparam_tau,
+            reparam_lambda=reparam_lambda,
+            structure=rhs.GuideUnstructured(), # Doesnt matter
+            coef_dec=True,
+            tau_scale=dataset.tau_scale,
+            c_df=experiment.c_df, c_scale=experiment.c_scale)
+        seed = int(wildcards.seed)
+        trainer = rhs.TrainerMCMC(
+            config,
+            num_warmup=experiment.num_warmup,
+            num_samples=experiment.num_samples,
+            key=jax.random.key(seed))
         trainer.train()
         trainer.save(output[0])
-
