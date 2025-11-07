@@ -1,6 +1,6 @@
 #+bibliography: ~/ilm/main/refs.bib
-# #+CITATION_STYLE: csl nature.csl
-#+cite_export: csl nature.csl
+#+CITATION_STYLE: csl nature.csl
+# #+cite_export: csl nature.csl
 #+OPTIONS: toc:nil
 
 Sparsifying priors such as the horseshoe are normally used when there are many features, but only some are predictive. What happens when most features are predictive, but also redundant? Ideally we'd like a sparse solution; a minimal number of features have a non-zero coefficient. [cite:@piironen_projective_2020]
@@ -22,9 +22,11 @@ The square of half-Cauchy \(\mathcal{C}^+\) is equal in distribution to a produc
 
 If \(z \sim \mathcal{C}^+(k)\), then 
 
-\(\sqrt{z} = \alpha\beta\), where
-
-\(\alpha \sim \mathcal{G}(\frac{1}{2},k^2), \beta \sim \mathcal{IG}(\frac{1}{2},1)\)
+\begin{align*}
+a &\sim \text{Gamma}(\frac{1}{2},k^2) \\
+b &\sim \text{InverseGamma}(\frac{1}{2},1) \\
+\sqrt{z} &= ab
+\end{align*}
 
 ** InverseGamma-InverseGamma
 The square of half-Cauchy \(\mathcal{C}^+\) is a result of sampling successively from two inverse-Gamma distributions. [cite:@neville_mean_2014] [cite:@ghosh_model_2019]
@@ -33,7 +35,7 @@ If \(z \sim \mathcal{C}^+(k)\), then
 
 \begin{align*}
 a &\sim \text{InvGamma}(\frac{1}{2}, \frac{1}{k^2}) \\
-z^2 &\sim \text{InvGamma}(\frac{1}{2}, \frac{1}{a})
+z^2 | a &\sim \text{InvGamma}(\frac{1}{2}, \frac{1}{a})
 \end{align*}
 
 
