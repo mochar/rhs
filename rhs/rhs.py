@@ -18,7 +18,7 @@ from .dist import *
 from .common import TraceType
 from .configuration import Configuration
 from .common import to_reg_lambda
-from .guide import GuideUnstructured, GuidePairCond, GuidePairMv, GuidePairCondCorr
+from .guide import GuideCorr, GuideUnstructured, GuidePairCond, GuidePairMv, GuidePairCondCorr
 from .utils import get_sample_params
 from .elbo import MultiELBO
 
@@ -144,6 +144,11 @@ class TrainerSVI(TrainerMixin):
                 match self.conf.structure:
                     case GuideUnstructured():
                         coef = trace[self.conf.coef_name]["fn"]
+                    case GuideCorr():
+                        coef = dist.Normal(
+                            self.params[f"locs.{self.conf.coef_name}"],
+                            self.params[f"scales.{self.conf.coef_name}"],
+                        )
                     case GuidePairCond() | GuidePairMv() | GuidePairCondCorr():
                         coef_marginal = dist.Normal(
                             self.params[f"locs.{self.conf.coef_name}"],

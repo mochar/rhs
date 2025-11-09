@@ -31,7 +31,74 @@ class GuideUnstructured:
                 coef = numpyro.deterministic('coef', coef_dec * tau * lambda_reg)
             else:
                 coef, *_ = normal_site('coef', inits)
-        
+
+@dataclass
+class GuideCorr:
+    """
+    Model correlation between coefficients as multivariate normal.
+    """
+    low_rank_factor: int | None = None
+
+    @property
+    def name(self):
+        suffix = ''
+        if self.low_rank_factor:
+            suffix = f'_{self.low_rank_factor}'
+        return f'corr{suffix}'
+    
+    def guide(self, D: int, reparam: Reparam, coef_decentered: bool, tau: ArrayLike, c: ArrayLike, inits: dict[str, Any]):
+        coef_name = 'coef' + ('_dec' if coef_decentered else '')
+
+        with numpyro.plate('d', D):
+            if reparam:
+                lambda_, lambda_loc, lambda_scale = reparam.guide('lambda', 1., inits)
+            else:
+                lambda_, lambda_loc, lambda_scale = lognormal_site('lambda', inits)
+
+            lambda_reg = to_reg_lambda(tau**2, lambda_**2, c*c)
+
+            coef_loc = numpyro.param(f'locs.{coef_name}', inits[f'locs.{coef_name}'])
+            coef_scale = numpyro.param(
+                f'scales.{coef_name}', inits[f'scales.{coef_name}'], constraint=pos_const)
+
+        # Multivariate normal over D-dim coefficients: q(coef|lambda)
+        if self.low_rank_factor is None:
+            # Cholesky of the correlation matrix
+            coef_chol_corr = numpyro.param(
+                'chols.coef',
+                inits['chols.coef'],
+                constraint=dist.constraints.corr_cholesky)
+            # Cholesky of the covariance matrix
+            coef_chol_cov = jnp.diag(coef_scale) @ coef_chol_corr
+            coef_joint = numpyro.sample(
+                'coef_joint',
+                dist.MultivariateNormal(coef_loc, scale_tril=coef_chol_cov),
+                infer={'is_auxiliary': True})
+        else:
+            # Model q(coef|lambda) as a low-rank multivariate normal.
+            # 𝛴 = FF^T + diag(d), where
+            # - F is DxM is the low-rank factor, M < D
+            # - d is D vector that represents the diagonal component
+            # In our case, variances (ie diagonals of 𝛴), v, are already known.
+            # We can use it to find d: d = v - sum_j(F_j^2)
+            coef_cov_factor = numpyro.param(
+                'coef_factor',
+                inits.get('coef_factor', jnp.ones((D, self.low_rank_factor))*0.))
+            coef_cov_diag = jnp.square(coef_scale) - jnp.square(coef_cov_factor).sum(-1)
+            coef_cov_diag = jnp.clip(coef_cov_diag, min=1e-6)
+            # coef_cov_diag = jnp.square(coef_scale_cond - coef_cov_factor.sum(-1))
+            coef_joint = numpyro.sample(
+                'coef_joint',
+                dist.LowRankMultivariateNormal(coef_loc, coef_cov_factor, coef_cov_diag),
+                infer={'is_auxiliary': True})
+
+        with numpyro.plate('d', D):
+            if coef_decentered:
+                coef_dec = numpyro.sample('coef_dec', dist.Delta(coef_joint))
+                coef = numpyro.deterministic('coef', coef_dec * tau * lambda_reg)
+            else:
+                coef_ = numpyro.sample('coef', dist.Delta(coef_joint))
+
 
 @dataclass
 class GuidePairMv:
@@ -250,8 +317,6 @@ class GuideFullMatrix:
         coef_name = 'coef' + ('_dec' if coef_decentered else '')
         coef_loc = numpyro.param(f'locs.{coef_name}', inits[f'locs.{coef_name}'])
 
-        
-
         with numpyro.plate('d', D):
             if reparam:
                 lambda_, lambda_loc, lambda_scale = reparam.guide('lambda', 1., inits)
@@ -283,7 +348,7 @@ class GuideFullMatrix:
 
 
 # Type
-GuideStructure = GuideUnstructured | GuidePairCond | GuidePairMv | GuideFullMatrix | GuidePairCondCorr
+GuideStructure = GuideUnstructured | GuideCorr | GuidePairCond | GuidePairMv | GuideFullMatrix | GuidePairCondCorr
 
 
             
