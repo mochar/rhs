@@ -39,7 +39,7 @@ class GuidePairMv:
     Paired multivariate normal guide.
     
     Model each (lambda_d, coef_d) pair as a multivariate normal.
-    This requires lambda to be a sample site, so it cannot be used with a reparam.
+    This requires coef and lambda to be a modeled jointly, so it cannot be used with a reparam.
     """
     name = 'pairmv'
         
@@ -94,14 +94,17 @@ class GuidePairCond:
     Paired conditional guide.
     
     Model each (lambda_d, coef_d) pair as a multivariate normal, but using seperate sites
-    using p(lambda_d, coef_d)=p(coef_d|lambda_d)p(lambda_d).
-    This does not require lambda to be a sample site, as long as a lambda values can be
-    passed into the conditional, so it cannot be used with a reparam.
+    using conditional rule: p(lambda_d, coef_d)=p(coef_d|lambda_d)p(lambda_d).
+    In this way, lambda can be sampled independently, allowing reparam to be used.
     """
     name = 'paircond'
 
     @staticmethod
     def _posterior_coef(lambda_, lambda_loc, lambda_scale, coef_loc, coef_scale, corr) -> tuple[ArrayLike, ArrayLike]:
+        """
+        Return params of p(coef|lambda) ~ N(), using the conditional rule of
+        multivariate normal distributions.
+        """
         if lambda_ is None: # lambda_ = lambda_loc
             loc = coef_loc
         else:
@@ -111,6 +114,8 @@ class GuidePairCond:
     
     def guide(self, D: int, reparam: Reparam, coef_decentered: bool, tau: ArrayLike, c: ArrayLike, inits: dict[str, Any]):
         with numpyro.plate('d', D):
+            
+            # Marginal of lambda, q(lambda)
             if reparam:
                 lambda_, lambda_loc, lambda_scale = reparam.guide('lambda', 1., inits)
             else:
@@ -118,20 +123,25 @@ class GuidePairCond:
 
             lambda_reg = to_reg_lambda(tau**2, lambda_**2, c*c)
 
-            # If i use lambda here, utils.get_sample_params raises error
+            # D-dim correlation vector of each (coef, lambda) pair
             lambda_coef_corr = numpyro.param(
                 'corrs.lambda_coef', 
+                # TODO If i use lambda here, utils.get_sample_params raises error
                 # lambda _: inits.get('corrs.lambda_coef', jnp.zeros(lambda_.shape)),
                 inits.get('corrs.lambda_coef', jnp.zeros(D)),
                 constraint=dist.constraints.interval(-1., 1.))
 
+            # Marginal of coef, q(coef)
             coef_name = 'coef' + ('_dec' if coef_decentered else '')
             coef_loc = numpyro.param(f'locs.{coef_name}', inits[f'locs.{coef_name}'])
             coef_scale = numpyro.param(
                 f'scales.{coef_name}',
                 inits[f'scales.{coef_name}'],
                 constraint=pos_const)
-    
+
+            # Given the marginals q(lambda) and q(coef), we can get the
+            # conditional q(coef|lambda) using the conditional rule of
+            # multivariate normals.
             coef_loc_cond, coef_scale_cond = self._posterior_coef(
                 lambda_, lambda_loc, lambda_scale, coef_loc, coef_scale, lambda_coef_corr)
             coef_dist = dist.Normal(coef_loc_cond, coef_scale_cond)
@@ -184,17 +194,27 @@ class GuidePairCondCorr(GuidePairCond):
     
         coef_loc_cond, coef_scale_cond = self._posterior_coef(lambda_, lambda_loc, lambda_scale, coef_loc, coef_scale, lambda_coef_corr)
 
+        # Multivariate normal over D-dim coefficients: q(coef|lambda)
         if self.low_rank_factor is None:
+            # Cholesky of the correlation matrix
             coef_chol_corr = numpyro.param(
                 'chols.coef',
                 inits['chols.coef'],
                 constraint=dist.constraints.corr_cholesky)
-            coef_chol_cov = jnp.diag(coef_scale_cond) @ coef_chol_corr @ jnp.diag(coef_scale_cond).T
+            # Cholesky of the covariance matrix
+            coef_chol_cov = jnp.diag(coef_scale_cond) @ coef_chol_corr
+            # coef_chol_cov = jnp.diag(coef_scale_cond) @ coef_chol_corr @ jnp.diag(coef_scale_cond).T
             coef_joint = numpyro.sample(
                 'coef_joint',
                 dist.MultivariateNormal(coef_loc_cond, scale_tril=coef_chol_cov),
                 infer={'is_auxiliary': True})
         else:
+            # Model q(coef|lambda) as a low-rank multivariate normal.
+            # 𝛴 = FF^T + diag(d), where
+            # - F is DxM is the low-rank factor, M < D
+            # - d is D vector that represents the diagonal component
+            # In our case, variances (ie diagonals of 𝛴), v, are already known.
+            # We can use it to find d: d = v - sum_j(F_j^2)
             coef_cov_factor = numpyro.param(
                 'coef_factor',
                 inits.get('coef_factor', jnp.ones((D, self.low_rank_factor))*0.))
