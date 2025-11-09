@@ -1,0 +1,287 @@
+:PROPERTIES:
+:header-args: :async yes :session rhs-reparams
+:END:
+
+* Preamble
+#+begin_src jupyter-python
+%load_ext autoreload
+%autoreload 2
+
+from glob import glob
+from pathlib import Path
+import os
+os.chdir('/home/mochar/dev/rhs/analysis')
+
+import jax
+from jax import numpy as jnp
+from jax import random
+import matplotlib.pyplot as plt
+import numpy as np
+import numpyro
+from numpyro.distributions import *
+from numpyro.infer import Predictive
+import dill
+import seaborn as sns
+import pandas as pd
+
+import rhs
+from experiments import Experiment
+
+jax.config.update('jax_platform_name', 'cpu')
+
+#+end_src
+
+#+RESULTS:
+* Load
+#+begin_src jupyter-python
+experiment = Experiment.svi_experiments['svi_reparam']
+svi_trainers = {}
+svi_runs = []
+for path in glob(f'output/{experiment.name}/*/*'):
+    path = Path(path)
+    if path.stem == 'dataset': continue
+    _, seed, reparam, structure, elbo = path.stem.split('--')
+    name = '/'.join(path.parts[-2:])
+    trainer = rhs.TrainerSVI.load(path)
+    svi_runs.append({'name': name,
+                     'dataset': path.parent.stem,
+                     'seed': int(seed),
+                     'reparam_tau': reparam.split('_')[0],
+                     'reparam_lambda': reparam.split('_')[1],
+                     'structure': structure,
+                     'elbo': elbo,
+                     'loss': float(trainer.losses[-1])})
+    svi_trainers[name] = trainer
+svi_runs = pd.DataFrame(svi_runs)
+svi_runs.index = svi_runs['name']
+jax.config.update('jax_platform_name', 'cpu')
+print(svi_runs.shape)
+#+end_src
+
+#+RESULTS:
+: (160, 8)
+
+* Datasets
+#+begin_src jupyter-python
+fig, axs = plt.subplots(ncols=len(experiment.datasets), nrows=2, figsize=(8, 6))
+for i, (name, dataset) in enumerate(experiment.datasets.items()):
+    sns.heatmap(dataset.X, center=0, ax=axs[0, i])
+    axs[0, i].set(title=name)
+    sns.histplot(np.corrcoef(np.vstack((dataset.Y, dataset.X.T)))[0, 1:], ax=axs[1, i])
+None
+#+end_src
+
+
+#+RESULTS:
+[[file:./.ob-jupyter/c80a6f8976cd1ce97dc8ed153c5c39af139c3b1a.png]]
+
+* Tau
+#+header: :var sharex="col" sharex='False
+#+begin_src jupyter-python
+sites = ['tau_aux1_dec', 'tau_aux1', 'tau_aux2_dec', 'tau_aux2', 'tau']
+for dataset in experiment.datasets:
+    runs = svi_runs.query(f'seed == 6 & dataset == "{dataset}"')\
+                   .drop_duplicates(subset='reparam_tau')\
+                   .sort_values('reparam_tau')
+    fig, axs = plt.subplots(
+        nrows=runs.shape[0], ncols=len(sites), sharex=sharex,
+        figsize=(3*len(sites),2*runs.shape[0]),
+        gridspec_kw=dict(wspace=0.2, hspace=0.2))
+    fig.suptitle(dataset)
+
+    for i, (name, run) in enumerate(runs.iterrows()):
+        trainer = svi_trainers[name]
+        axs[i, 0].set(ylabel=run['reparam_tau'])
+        s = trainer.sample_posterior()
+        
+        for j, site in enumerate(sites):
+            ax = axs[i, j]
+            ax.set_yticks([], [])
+            if i == 0:
+                ax.set(title=site)
+            try:
+                d = trainer.posterior(site)
+            except:
+                ax.set_xticks([], [])
+                continue
+
+            alpha = 1.
+            match site.split('_')[-1], trainer.conf.reparam_tau:
+                case 'aux1', rhs.ReparamII(dec1=True):
+                    alpha = 0.5
+                case 'aux2', rhs.ReparamII(dec2=True) | rhs.ReparamIG(dec=True):
+                    alpha = 0.5
+                case 'tau', _ if trainer.conf.reparam_tau:
+                    alpha = 0.5
+                
+            x = jnp.linspace(d.icdf(.01), d.icdf(.99), 300)
+            ax.hist(s[site], bins=30, alpha=alpha)
+            ax.axvline(s[site].mean(), ls='--', alpha=alpha)
+            ax.text(1.0, .7, f'{s[site].mean():.4f}',
+                    transform=ax.transAxes,
+                    ha='right', va='top')
+
+            axt = ax.twinx()
+            axt.margins(0.)
+            axt.yaxis.set_visible(False)
+            axt.plot(x, jnp.exp(d.log_prob(x)), c='deeppink', alpha=alpha)
+            axt.axvline(d.mean, ls='--', c='deeppink', alpha=alpha)
+            ax.text(1.0, .9, f'{d.mean:.4f}',
+                    transform=ax.transAxes,
+                    ha='right', va='top', c='deeppink')
+
+            if site == 'a':
+                ax.axvline(TRUE.scale, lw=2, c='k')
+                if site == 'mu':
+                    ax.axvline(TRUE.mean, lw=2, c='k')
+
+None
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+[[file:./.ob-jupyter/eb6bce73bee99c44391bdb84cf9c4d00f43c0833.png]]
+[[file:./.ob-jupyter/928d0d11f1458ccd7a908a25eb0962f69095915e.png]]
+:END:
+
+
+* Lambda
+#+name: lambda-dists
+#+header: :var sharex="col" sharex='False threshold=5. k=0
+#+begin_src jupyter-python
+sites = ['lambda_aux1_dec', 'lambda_aux1', 'lambda_aux2_dec', 'lambda_aux2', 'lambda', 'coef_dec', 'coef']
+
+for ds, dataset in experiment.datasets.items():
+    # runs = svi_runs.query(f'seed == 0 & dataset == "{ds}"')\
+    #                .drop_duplicates(subset='reparam_lambda')\
+    #                .sort_values('reparam_lambda')
+    runs = svi_runs.query(f'seed == 0 & dataset == "{ds}"')\
+                   .sort_values('reparam_lambda')
+    fig, axs = plt.subplots(
+        nrows=runs.shape[0], ncols=len(sites), sharex=sharex,
+        figsize=(3*len(sites),2*runs.shape[0]),
+        gridspec_kw=dict(wspace=0.2, hspace=0.2))
+    fig.suptitle(ds)
+
+    for i, (name, run) in enumerate(runs.iterrows()):
+        trainer = svi_trainers[name]
+        s = trainer.sample_posterior()
+
+        m = trainer.posterior('lambda').mode
+        m = m[k*dataset.D_per:(k+1)*dataset.D_per]
+        ind = m.argmax() + k*dataset.D_per
+        r = run['reparam_lambda']
+        axs[i, 0].set(ylabel=f'{r} (D={ind})')
+    
+        for j, site in enumerate(sites):
+            ax = axs[i, j]
+            ax.set_yticks([], [])
+            if i == 0:
+                ax.set(title=site)
+            try:
+                d = trainer.posterior(site)
+                d = d.__class__(d.loc[ind], d.scale[ind])
+            except:
+                ax.set_xticks([], [])
+                continue
+        
+            alpha = 1.  
+            if (site.endswith('aux1') and getattr(trainer.conf.reparam_lambda, 'dec1', False)) or \
+               (site.endswith('aux2') and (getattr(trainer.conf.reparam_lambda, 'dec2', False) or getattr(trainer.conf.reparam_lambda, 'dec', False))) or \
+               (site == 'lambda' and trainer.conf.reparam_lambda) or \
+               (site == 'coef'):
+                alpha = 0.5
+    
+            x = jnp.linspace(d.icdf(.01), d.icdf(.99), 300)
+            ss = s[site][:, ind]
+            ax.hist(ss, bins=30, alpha=alpha)
+            ax.axvline(ss.mean(), ls='--', alpha=alpha)
+            ax.text(1.0, .7, f'{ss.mean():.4f}',
+                    transform=ax.transAxes,
+                    ha='right', va='top')
+        
+            axt = ax.twinx()
+            axt.margins(0.)
+            axt.yaxis.set_visible(False)
+            axt.plot(x, jnp.exp(d.log_prob(x)), c='deeppink', alpha=alpha)
+            axt.axvline(d.mean, ls='--', c='deeppink', alpha=alpha)
+            ax.text(1.0, .9, f'{d.mean:.4f}',
+                    transform=ax.transAxes,
+                    ha='right', va='top', c='deeppink')
+        
+            if site == 'a':
+                ax.axvline(TRUE.scale, lw=2, c='k')
+            if site == 'coef':
+                ax.axvline(dataset.B_k_std[k], lw=2, c='k')
+    
+None
+#+end_src
+
+#+RESULTS: lambda-dists
+:RESULTS:
+[[file:./.ob-jupyter/ec79578aad3ec9a9b75e8a53f1912908d8164183.png]]
+[[file:./.ob-jupyter/b0cd689a925d5d2b6df6064bf6e4d0773e64384a.png]]
+:END:
+
+
+#+call: lambda-dists(k=1)
+
+#+RESULTS:
+:RESULTS:
+[[file:./.ob-jupyter/b030491644b426a775a9a394a22fdc755a481965.png]]
+[[file:./.ob-jupyter/ed6e562539dfb49abdbb2bb87247409754e2c12d.png]]
+:END:
+
+
+#+call: lambda-dists(k=2)
+
+#+RESULTS:
+:RESULTS:
+[[file:./.ob-jupyter/1696a0929964ab653c5d99f06329b67f0ae3b4cb.png]]
+[[file:./.ob-jupyter/9a4fb4764e8d5567f08fdf51266583a5ae62c057.png]]
+:END:
+* Coefficients
+#+begin_src jupyter-python
+coefs = pd.DataFrame([
+    {'name': name, 'feature': str(k),
+     'group': str(k // experiment.datasets[run['dataset']].D_per),
+     'coef': float(svi_trainers[name].estimates['coef'][k])}
+    for name, run in svi_runs.iterrows()
+    for k in range(svi_trainers[name].conf.D)])
+coefs.index = coefs['name']
+coefs = pd.concat([coefs, svi_runs.loc[coefs['name'].values]], axis=1)
+
+for i, dataset in enumerate(experiment.datasets):
+    for j, reparam_tau in enumerate(svi_runs['reparam_tau'].unique()):
+        for k, reparam_lambda in enumerate(svi_runs['reparam_lambda'].unique()):
+            sub = coefs['dataset'] == dataset
+            sub &= coefs['reparam_tau'] == reparam_tau
+            sub &= coefs['reparam_lambda'] == reparam_lambda
+            if sub.sum() > 0:
+                fig, ax = plt.subplots(figsize=(15,3))
+                fig.suptitle(f'{dataset} - {reparam_tau} - {reparam_lambda}')
+                sns.stripplot(data=coefs[sub], x='seed', y='coef', hue='group', dodge=True, legend=False)
+
+None
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+[[file:./.ob-jupyter/9cf3ee1b58c28b6c132f542dfc37c9990d32d89c.png]]
+[[file:./.ob-jupyter/a62d0c2272f61c5baed72c860e0008097e336e1f.png]]
+[[file:./.ob-jupyter/4bd841eae7684e86ef090f1106ef05a1830616e2.png]]
+[[file:./.ob-jupyter/8e0d93abf446aae79136465d31776445e20951ce.png]]
+[[file:./.ob-jupyter/65d83fa8334f80432badf1b19a692a010ecbd60c.png]]
+[[file:./.ob-jupyter/851a0854e6bb7eb2f845cfda5afaf529bc497b0b.png]]
+[[file:./.ob-jupyter/bec28cfe6319502664bbfb78192d7ba0f04bb06d.png]]
+[[file:./.ob-jupyter/fdddc00d0d73ffcf7fcef27044458a3900b05c09.png]]
+[[file:./.ob-jupyter/1de24b310d951255a04b50ff91455135260d1789.png]]
+[[file:./.ob-jupyter/f3b2c8ea6deff65cbf38e88afa569799798be1f7.png]]
+[[file:./.ob-jupyter/b5a4b93f0fd5db99c5cab201b54048b44b9f8b86.png]]
+[[file:./.ob-jupyter/0ad3c585250c40ec771b35fd2b308966590f76f8.png]]
+[[file:./.ob-jupyter/0fe9973a9d0820fd16e2437f9c15266414b4a34f.png]]
+[[file:./.ob-jupyter/4258bc77e5b2f4a0687764fd51b8f6c1dae16956.png]]
+[[file:./.ob-jupyter/8698a922d4a91f89875892f49275dfc9df4fb489.png]]
+[[file:./.ob-jupyter/a0a28c9869c0515f75b3876dcc63ed290dd92f01.png]]
+:END:
+

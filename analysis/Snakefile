@@ -14,6 +14,8 @@ import rhs
 from experiments import Experiment, REPARAMS, STRUCTURES, ELBOS
 
 jax.config.update('jax_platform_name', 'cpu')
+os.environ["JAX_PLATFORM_NAME"] = "cpu"
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 OUT_PATH = Path('./output/')
 OUT_PATH.mkdir(exist_ok=True)
@@ -21,26 +23,36 @@ OUT_PATH.mkdir(exist_ok=True)
 rule all:
     input:
         sum([
-            expand(f'{OUT_PATH}/{name}/{{dataset}}/svi--{{seed}}--{{reparam}}--{{structure}}--{{elbo}}.pkl',
+            expand(f'{OUT_PATH}/{name}/{{dataset}}/svi--{{seed}}--{{reparam}}--{{structure}}--{{elbo}}--{{coef_dec}}--{{tau_scale}}--{{c_scale}}.pkl',
                    dataset=experiment.datasets.keys(),
                    seed=experiment.seeds,
                    reparam=experiment.reparams,
                    structure=experiment.structures,
-                   elbo=experiment.elbos)
+                   elbo=experiment.elbos,
+                   coef_dec=experiment.coef_decs,
+                   tau_scale=experiment.tau_scales,
+                   c_scale=experiment.c_scales)
             for name, experiment in Experiment.svi_experiments.items()
         ], []),
-        # sum([
-            # expand(f'{OUT_PATH}/{name}/{{dataset}}/mcmc--{{seed}}--{{reparam}}.pkl',
-                   # dataset=experiment.datasets.keys(),
-                   # seed=experiment.seeds,
-                   # reparam=experiment.reparams)
-            # for name, experiment in Experiment.mcmc_experiments.items()
-        # ], [])
+        sum([
+            expand(f'{OUT_PATH}/{name}/{{dataset}}/mcmc--{{seed}}--{{reparam}}--{{coef_dec}}--{{tau_scale}}--{{c_scale}}.pkl',
+                   dataset=experiment.datasets.keys(),
+                   seed=experiment.seeds,
+                   reparam=experiment.reparams,
+                   coef_dec=experiment.coef_decs,
+                   tau_scale=experiment.tau_scales,
+                   c_scale=experiment.c_scales)
+            for name, experiment in Experiment.mcmc_experiments.items()
+        ], [])
 
 rule svi:
     output:
-        f'{OUT_PATH}/{{experiment}}/{{dataset}}/svi--{{seed}}--{{reparam}}--{{structure}}--{{elbo}}.pkl'
+        f'{OUT_PATH}/{{experiment}}/{{dataset}}/svi--{{seed}}--{{reparam}}--{{structure}}--{{elbo}}--{{coef_dec}}--{{tau_scale}}--{{c_scale}}.pkl'
     run:
+        jax.config.update('jax_platform_name', 'cpu')
+        os.environ["JAX_PLATFORM_NAME"] = "cpu"
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
         experiment = Experiment.svi_experiments[wildcards.experiment]
         dataset = experiment.datasets[wildcards.dataset]
         with open(f'{OUT_PATH}/{wildcards.experiment}/{wildcards.dataset}/dataset.pkl', 'wb') as f:
@@ -48,14 +60,20 @@ rule svi:
         reparam_comb = wildcards.reparam
         reparam_tau = REPARAMS[reparam_comb.split('_')[0]]
         reparam_lambda = REPARAMS[reparam_comb.split('_')[1]]
+        coef_dec = eval(wildcards.coef_dec)
+        c_scale = eval(wildcards.c_scale)
+        tau_scale = eval(wildcards.tau_scale)
+        if tau_scale == 0:
+            tau_scale = dataset.tau_scale
         config = rhs.Configuration(
             dataset.X, dataset.Y,
             reparam_tau=reparam_tau,
             reparam_lambda=reparam_lambda,
             structure=STRUCTURES[wildcards.structure],
-            coef_dec=True,
-            tau_scale=dataset.tau_scale,
-            c_df=experiment.c_df, c_scale=experiment.c_scale)
+            coef_dec=coef_dec,
+            tau_scale=tau_scale,
+            c_df=experiment.c_df,
+            c_scale=c_scale)
         seed = int(wildcards.seed)
         trainer = rhs.TrainerSVI(
             config,
@@ -66,8 +84,12 @@ rule svi:
         
 rule mcmc:
     output:
-        f'{OUT_PATH}/{{experiment}}/{{dataset}}/mcmc--{{seed}}--{{reparam}}.pkl'
+        f'{OUT_PATH}/{{experiment}}/{{dataset}}/mcmc--{{seed}}--{{reparam}}--{{coef_dec}}--{{tau_scale}}--{{c_scale}}.pkl'
     run:
+        jax.config.update('jax_platform_name', 'cpu')
+        os.environ["JAX_PLATFORM_NAME"] = "cpu"
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
         experiment = Experiment.mcmc_experiments[wildcards.experiment]
         dataset = experiment.datasets[wildcards.dataset]
         with open(f'{OUT_PATH}/{wildcards.experiment}/{wildcards.dataset}/dataset.pkl', 'wb') as f:
@@ -75,14 +97,20 @@ rule mcmc:
         reparam_comb = wildcards.reparam
         reparam_tau = REPARAMS[reparam_comb.split('_')[0]]
         reparam_lambda = REPARAMS[reparam_comb.split('_')[1]]
+        coef_dec = eval(wildcards.coef_dec)
+        c_scale = eval(wildcards.c_scale)
+        tau_scale = eval(wildcards.tau_scale)
+        if tau_scale == 0:
+            tau_scale = dataset.tau_scale
         config = rhs.Configuration(
             dataset.X, dataset.Y,
             reparam_tau=reparam_tau,
             reparam_lambda=reparam_lambda,
             structure=rhs.GuideUnstructured(), # Doesnt matter
-            coef_dec=True,
-            tau_scale=dataset.tau_scale,
-            c_df=experiment.c_df, c_scale=experiment.c_scale)
+            coef_dec=coef_dec,
+            tau_scale=tau_scale,
+            c_df=experiment.c_df,
+            c_scale=c_scale)
         seed = int(wildcards.seed)
         trainer = rhs.TrainerMCMC(
             config,

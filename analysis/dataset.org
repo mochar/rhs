@@ -1,0 +1,60 @@
+:PROPERTIES:
+:header-args: :async yes :session rhs-dataset
+:END:
+
+#+begin_src jupyter-python
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+import rhs
+from rhs.datasets import SimDataset, TestDataset
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+
+* 
+#+begin_src jupyter-python
+ds = SimDataset(N=100, D_per=2, K=2, correlation=.99)
+ds.X.var(0)
+#+end_src
+
+#+RESULTS:
+: Array([1.0599314 , 1.04444   , 0.7991472 , 0.76378745], dtype=float32)
+
+
+#+begin_src jupyter-python
+sns.pairplot(pd.DataFrame(ds.X))
+None
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/01d0a514cb61e9ede90d22f513e0c6ffb37a442f.png]]
+
+* x
+#+begin_src jupyter-python
+D_per = 30
+B_k = np.array([3.0, 3.0, 3.0])
+x_std = 0.1
+datasets={
+    "sparse": rhs.datasets.TestDataset(
+        D_per=D_per, B_k=B_k, correlated=False, x_std=x_std
+    ),
+    "correlated": rhs.datasets.TestDataset(
+        D_per=D_per, B_k=B_k, correlated=0.9, x_std=x_std
+    ),
+    "uncorrelated": rhs.datasets.TestDataset(
+        D_per=D_per, B_k=B_k, correlated=.01, x_std=x_std)
+    }
+
+fig, axs = plt.subplots(ncols=len(datasets), nrows=2, figsize=(12, 6))
+for i, (name, dataset) in enumerate(datasets.items()):
+    sns.heatmap(dataset.X, center=0, ax=axs[0, i])
+    axs[0, i].set(title=name)
+    sns.histplot(np.corrcoef(np.vstack((dataset.Y, dataset.X.T)))[0, 1:], ax=axs[1, i])
+None
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/789511a9927624c093cdb27d776f70587225d3dd.png]]

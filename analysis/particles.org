@@ -1,0 +1,156 @@
+:PROPERTIES:
+:header-args: :async yes :session rhs-particles
+:END:
+
+* Preamble
+ #+begin_src jupyter-python
+ %load_ext autoreload
+ %autoreload 2
+
+ from glob import glob
+ from pathlib import Path
+ import itertools
+ import os
+ os.chdir('/home/mochar/dev/rhs/analysis')
+
+ import jax
+ from jax import numpy as jnp
+ from jax import random
+ import matplotlib.pyplot as plt
+ import numpy as np
+ import numpyro
+ from numpyro.distributions import *
+ from numpyro.infer import Predictive
+ import dill
+ import seaborn as sns
+ import pandas as pd
+
+ import rhs
+ from experiments import Experiment
+
+ jax.config.update('jax_platform_name', 'cpu')
+
+#+end_src
+
+ #+RESULTS:
+ :RESULTS:
+ :END:
+* Load
+#+begin_src jupyter-python
+experiments = {Path(p).stem: Experiment.svi_experiments[Path(p).stem]
+               for p in glob('output/svi_particles_*')}
+trainers = {}
+runs = []
+for path in glob(f'output/svi_particles_*/*/*'):
+    path = Path(path)
+    if path.stem == 'dataset': continue
+    _, seed, reparam, structure, elbo, coef_dec, tau_scale, c_scale = path.stem.split('--')
+    experiment = path.parent.parent.stem
+    name = experiment + ':' + '/'.join(path.parts[-2:])
+    trainer = rhs.TrainerSVI.load(path)
+    runs.append({'name': name,
+                 'dataset': path.parent.stem,
+                 'experiment': experiment,
+                 'particles': int(experiment.split('_')[-1]),
+                 'seed': int(seed),
+                 'reparam': reparam,
+                 'reparam_tau': reparam.split('_')[0],
+                 'reparam_lambda': reparam.split('_')[1],
+                 'structure': structure,
+                 'elbo': elbo,
+                 'coef_dec': coef_dec,
+                 'tau_scale': tau_scale,
+                 'c_scale': c_scale,
+                 'loss': float(trainer.losses[-1])})
+    trainers[name] = trainer
+runs = pd.DataFrame(runs)
+PARTICLES = sorted(runs['particles'].unique())
+runs['particles'] = pd.Categorical(runs['particles'], categories=PARTICLES, ordered=True)
+runs.index = runs['name']
+jax.config.update('jax_platform_name', 'cpu')
+print(runs.shape)
+#+end_src
+
+#+RESULTS:
+: (60, 14)
+
+
+* Losses
+#+begin_src jupyter-python
+fig, ax = plt.subplots(figsize=(5, 6), layout='tight', sharey=True)
+hue = 'elbo'
+y = 'experiment'
+y = 'particles'
+sns.stripplot(data=runs, y=y, x='loss', hue=hue, dodge=True, ax=ax)
+sns.boxplot(data=runs, y=y, x='loss', hue=hue, dodge=True, ax=ax, legend=False)
+None
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/daf506782f96419a3e70d05d7693afb79dbb129c.png]]
+
+#+begin_src jupyter-python
+fig, ax = plt.subplots(figsize=(10, 4))
+for name, run in runs.iterrows():
+    trainer = trainers[name]
+    ax.plot(trainer.losses, label=run['particles'], alpha=.3)
+# plt.legend()
+# plt.xlim([0, 400])
+None
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/7b83d90ce9d6d88c873607f2ed9adce020d9c59c.png]]
+* Coefficients
+#+begin_src jupyter-python
+coefs = pd.DataFrame([
+    {'name': name, 'feature': str(k),
+     'group': str(k // experiments[run['experiment']].datasets[run['dataset']].D_per),
+     'coef': float(trainers[name].estimates['coef'][k])}
+    for name, run in runs.iterrows()
+    for k in range(trainers[name].conf.D)])
+coefs.index = coefs['name']
+coefs = pd.concat([coefs, runs.loc[coefs['name'].values]], axis=1)
+
+for particles, elbo, reparam_tau, reparam_lambda, in itertools.product(
+        PARTICLES,
+        runs['elbo'].unique(),
+        runs['reparam_tau'].unique(),
+        runs['reparam_lambda'].unique(),
+):
+        
+        sub = coefs['particles'] == particles
+        sub &= coefs['elbo'] == elbo
+        sub &= coefs['reparam_tau'] == reparam_tau
+        sub &= coefs['reparam_lambda'] == reparam_lambda
+        if sub.sum() > 0:
+            fig, ax = plt.subplots(figsize=(15,3))
+            fig.suptitle(f'{particles} - {elbo} - {reparam_tau} - {reparam_lambda}')
+            sns.stripplot(data=coefs[sub], x='seed', y='coef', hue='group', dodge=True,   legend=False)
+            ax.axhline(0, c='k', alpha=.5, ls='--')
+            ax.set(ylim=[-0.02, None])
+
+None
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+[[file:./.ob-jupyter/ef71d4750994537cc06cdb62288d62d6cc2dd441.png]]
+[[file:./.ob-jupyter/00a072015c7f53e95a217e6d9cd56760c73d45d1.png]]
+[[file:./.ob-jupyter/513ddeb72afbb234f5db931a51ea755a34cef9f3.png]]
+[[file:./.ob-jupyter/68aa74d384cc42650794b345893fd85ef7c9dfb3.png]]
+[[file:./.ob-jupyter/f7fc387e11b75934f0030f19943d94a4652e5daa.png]]
+[[file:./.ob-jupyter/2b50a61a4ea031c6f2e2dd3abd991e92f9406d58.png]]
+[[file:./.ob-jupyter/d8539401ce32b0800cee1b173ac6c0558746fefa.png]]
+[[file:./.ob-jupyter/5d89a6e997bd475cb892da74d5cf7b74e825147e.png]]
+[[file:./.ob-jupyter/56419299f3186f3f0e15f43d2e6abb86decf82ba.png]]
+[[file:./.ob-jupyter/6ea5bf92cd22c8a4f1774f65426ecebaab7de8ed.png]]
+[[file:./.ob-jupyter/345ccf35dca2784ef577a0a303d3aef8909bbe1f.png]]
+[[file:./.ob-jupyter/a2de642472e6c6a37579e84cbecdcacd41658a0d.png]]
+[[file:./.ob-jupyter/554dfaaccf01cb5c2e45db4d1e9f0c9d082dacdb.png]]
+[[file:./.ob-jupyter/d7bd419077303c4f78c39916d44c8814c2756d67.png]]
+[[file:./.ob-jupyter/220ea5769a7e8c3ad20b562cfd420115362084ee.png]]
+:END:
+
+
+

@@ -1,0 +1,282 @@
+:PROPERTIES:
+:header-args: :async yes :session rhs-posterior
+:END:
+
+With small and large num of features, how does posterior correlation look like.
+
+* Preamble
+ #+begin_src jupyter-python
+ %load_ext autoreload
+ %autoreload 2
+
+ from glob import glob
+ from pathlib import Path
+ import itertools
+ import os
+ os.chdir('/home/mochar/dev/rhs/analysis')
+
+ import jax
+ from jax import numpy as jnp
+ from jax import random
+ import matplotlib.pyplot as plt
+ import numpy as np
+ import numpyro
+ from numpyro.distributions import *
+ from numpyro.infer import Predictive
+ import dill
+ import seaborn as sns
+ import pandas as pd
+
+ import rhs
+ from experiments import Experiment
+
+ jax.config.update('jax_platform_name', 'cpu')
+
+#+end_src
+
+ #+RESULTS:
+
+* Load
+#+begin_src jupyter-python
+svi_experiment = Experiment.svi_experiments['svi_post']
+svi_trainers = {}
+svi_runs = []
+for path in glob(f'output/{svi_experiment.name}/*/*'):
+    path = Path(path)
+    if path.stem == 'dataset': continue
+    _, seed, reparam, structure, elbo, coef_dec, tau_scale, c_scale = path.stem.split('--')
+    name = '/'.join(path.parts[-2:])
+    trainer = rhs.TrainerSVI.load(path)
+    svi_runs.append({'name': name,
+                     'dataset': path.parent.stem,
+                     'seed': int(seed),
+                     'reparam': reparam,
+                     'reparam_tau': reparam.split('_')[0],
+                     'reparam_lambda': reparam.split('_')[1],
+                     'structure': structure,
+                     'elbo': elbo,
+                     'coef_dec': coef_dec,
+                     'tau_scale': tau_scale,
+                     'c_scale': c_scale,
+                     'loss': float(trainer.losses[-1])})
+    svi_trainers[name] = trainer
+svi_runs = pd.DataFrame(svi_runs)
+svi_runs.index = svi_runs['name']
+jax.config.update('jax_platform_name', 'cpu')
+print(svi_runs.shape)
+#+end_src
+
+#+RESULTS:
+: (144, 12)
+
+#+begin_src jupyter-python
+mcmc_experiment = Experiment.mcmc_experiments['mcmc_post']
+mcmc_trainers = {}
+mcmc_runs = []
+for path in glob(f'output/{mcmc_experiment.name}/*/*'):
+    path = Path(path)
+    if path.stem == 'dataset': continue
+    _, seed, reparam, coef_dec, tau_scale, c_scale = path.stem.split('--')
+    name = '/'.join(path.parts[-2:])
+    trainer = rhs.TrainerMCMC.load(path)
+    mcmc_runs.append({'name': name,
+                     'dataset': path.parent.stem,
+                     'seed': int(seed),
+                     'reparam': reparam,
+                     'reparam_tau': reparam.split('_')[0],
+                     'reparam_lambda': reparam.split('_')[1],
+                     'coef_dec': coef_dec,
+                     'tau_scale': tau_scale,
+                     'c_scale': c_scale,
+                      })
+    mcmc_trainers[name] = trainer
+mcmc_runs = pd.DataFrame(mcmc_runs)
+mcmc_runs.index = mcmc_runs['name']
+print(mcmc_runs.shape)
+#+end_src
+
+#+RESULTS:
+: (8, 9)
+
+* SVI loss
+#+begin_src jupyter-python
+fig, axs = plt.subplots(figsize=(8, 6), ncols=len(svi_experiment.datasets), layout='tight',
+                        sharey=True)
+for ax, dataset in zip(axs, svi_experiment.datasets):
+    data = svi_runs[svi_runs['dataset'] == dataset]
+    hue = 'elbo'
+    # hue = 'reparam'
+    sns.stripplot(data=data, y='structure', x='loss', hue=hue, dodge=True, ax=ax)
+    sns.boxplot(data=data, y='structure', x='loss', hue=hue, dodge=True, ax=ax, legend=False)
+    ax.set(title=dataset)
+    None
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/85a67eb533685311946323f5cee312d92c3758f6.png]]
+
+#+begin_src jupyter-python
+datasets = list(svi_experiment.datasets.keys())
+fig, axs = plt.subplots(ncols=len(datasets), figsize=(10, 4))
+for ax, dataset in zip(axs, datasets):
+    ax.set(title=dataset, ylim=[None, 200])
+for name, run in svi_runs.iterrows():
+    trainer = svi_trainers[name]
+    ax = axs[datasets.index(run['dataset'])]
+    ax.plot(trainer.losses, label=name)
+# plt.legend()
+# plt.xlim([0, 400])
+None
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/8a1498c50c896386f7af348b8c0646b691bf0212.png]]
+
+
+* Coefficients SVI
+#+begin_src jupyter-python
+coefs = pd.DataFrame([
+    {'name': name, 'feature': str(k),
+     'group': str(k // svi_experiment.datasets[run['dataset']].D_per),
+     'coef': float(svi_trainers[name].estimates['coef'][k])}
+    for name, run in svi_runs.iterrows()
+    for k in range(svi_trainers[name].conf.D)])
+coefs.index = coefs['name']
+coefs = pd.concat([coefs, svi_runs.loc[coefs['name'].values]], axis=1)
+
+structures = svi_runs['structure'].unique()
+
+for dataset, elbo, seed, reparam_tau, reparam_lambda, coef_dec, tau_scale, c_scale, in itertools.product(
+        svi_experiment.datasets,
+        svi_experiment.elbos,
+        svi_experiment.seeds,
+        svi_runs['reparam_tau'].unique(),
+        svi_runs['reparam_lambda'].unique(),
+        svi_experiment.coef_decs,
+        svi_experiment.tau_scales,
+        svi_experiment.c_scales,
+):
+        
+        sub = coefs['dataset'] == dataset
+        sub &= coefs['elbo'] == elbo
+        sub &= coefs['reparam_tau'] == reparam_tau
+        sub &= coefs['reparam_lambda'] == reparam_lambda
+        sub &= coefs['coef_dec'] == str(coef_dec)
+        sub &= coefs['tau_scale'] == str(tau_scale)
+        sub &= coefs['c_scale'] == str(c_scale)
+        if sub.sum() > 0:
+            fig, ax = plt.subplots(figsize=(15,3))
+            fig.suptitle(f'{dataset} - {elbo} - {reparam_tau} - {reparam_lambda} - {coef_dec} - {tau_scale} - {c_scale}')
+            sns.stripplot(data=coefs[sub], x='structure', y='coef', hue='group', dodge=True,   legend=False, order=structures)
+            ax.axhline(0, c='k', alpha=.5, ls='--')
+            ax.set(ylim=[-0.02, None])
+
+None
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+: /tmp/ipykernel_3912097/366202273.py:31: RuntimeWarning: More than 20 figures have been opened. Figures created through the pyplot interface (`matplotlib.pyplot.figure`) are retained until explicitly closed and may consume too much memory. (To control this warning, see the rcParam `figure.max_open_warning`). Consider using `matplotlib.pyplot.close()`.
+:   fig, ax = plt.subplots(figsize=(15,3))
+[[file:./.ob-jupyter/b8f01e346a7d9c19e2a47d17da7e4da9d50061a5.png]]
+[[file:./.ob-jupyter/d2cd4865defd37c712854f1f1a6e843acd87e64b.png]]
+[[file:./.ob-jupyter/c0975d63daec89ef353455d5ce5a51ea69261793.png]]
+[[file:./.ob-jupyter/92b20e4932d241bc79d81a9cd9e07c0866dfea88.png]]
+[[file:./.ob-jupyter/eb6a7f057f7ca89127fdffa83ba9800fc4c42f0e.png]]
+[[file:./.ob-jupyter/b91edd3fc991bbba626a52b111768b7a60df5d09.png]]
+[[file:./.ob-jupyter/6ba03eeb357c6b6057d02f6096aa8b3ddf7d9e57.png]]
+[[file:./.ob-jupyter/89f8493b32a315193f181d6cfc11b585d1466056.png]]
+[[file:./.ob-jupyter/0f98d2ecc7e86c395cb2b837ba90daad885d910d.png]]
+[[file:./.ob-jupyter/009e63409def154e4815b1da27e347247aa10a8d.png]]
+[[file:./.ob-jupyter/4f33bf43fb31d843e5bbd6b1b7d2dc286b86cfb9.png]]
+[[file:./.ob-jupyter/57ffd2060da53a11ba1f30075e06797a619993e1.png]]
+[[file:./.ob-jupyter/ec0aeff42c5609ed6922abe4c699ee86393823d6.png]]
+[[file:./.ob-jupyter/e7002f60f6ca9993e892035acdbca56c5b8a060c.png]]
+[[file:./.ob-jupyter/3d2b5b511ae46e69c3e19c5e7c32bd7830108ae7.png]]
+[[file:./.ob-jupyter/ca6db90b73f32ea0f0a669302f49eca15e8ec4d2.png]]
+[[file:./.ob-jupyter/0b3a33397c6a27a7b4b05686e776ea2260ff2c8d.png]]
+[[file:./.ob-jupyter/9e5d3b626d484edb12b60f5260f85ecff3ccaec7.png]]
+[[file:./.ob-jupyter/3bc66fbf9797dbd52e945e3e7bac6782fe23ae8f.png]]
+[[file:./.ob-jupyter/9a3026b3be6ec41c0e0bc145a21642fa84dd1546.png]]
+[[file:./.ob-jupyter/aff9973d34ebb3dd2fdd2a801063d99635b727a3.png]]
+[[file:./.ob-jupyter/c7958f3f100c093face2595486c636aae7eabd13.png]]
+[[file:./.ob-jupyter/5ac390f5fd5d1140128eeb46292b4a2e219f17f9.png]]
+[[file:./.ob-jupyter/9c0063938469a486a52f8e1c39ec11c63a43e6ce.png]]
+:END:
+* Coefficients MCMC
+#+begin_src jupyter-python
+coefs = pd.DataFrame([
+    {'name': name, 'feature': str(k),
+     'group': str(k // mcmc_experiment.datasets[run['dataset']].D_per),
+     'coef': float(mcmc_trainers[name].estimates['coef'][k])}
+    for name, run in mcmc_runs.iterrows()
+    for k in range(mcmc_trainers[name].conf.D)])
+coefs.index = coefs['name']
+coefs = pd.concat([coefs, mcmc_runs.loc[coefs['name'].values]], axis=1)
+
+datasets = list(mcmc_experiment.datasets.keys())
+
+for seed, reparam_tau, reparam_lambda, coef_dec, tau_scale, c_scale, in itertools.product(
+        mcmc_experiment.seeds,
+        mcmc_runs['reparam_tau'].unique(),
+        mcmc_runs['reparam_lambda'].unique(),
+        mcmc_experiment.coef_decs,
+        mcmc_experiment.tau_scales,
+        mcmc_experiment.c_scales,
+):
+        
+        sub = coefs['reparam_tau'] == reparam_tau
+        sub &= coefs['reparam_lambda'] == reparam_lambda
+        sub &= coefs['coef_dec'] == str(coef_dec)
+        sub &= coefs['tau_scale'] == str(tau_scale)
+        sub &= coefs['c_scale'] == str(c_scale)
+        if sub.sum() > 0:
+            fig, ax = plt.subplots(figsize=(15,3))
+            fig.suptitle(f'{dataset} - {reparam_tau} - {reparam_lambda} - {coef_dec} - {tau_scale} - {c_scale}')
+            sns.stripplot(data=coefs[sub], x='dataset', y='coef', hue='group', dodge=True,   legend=False, order=datasets)
+            ax.axhline(0, c='k', alpha=.5, ls='--')
+            ax.set(ylim=[-0.02, None])
+
+None
+#+end_src
+
+#+RESULTS:
+:RESULTS:
+[[file:./.ob-jupyter/a6d1eaa27c0881f6be0ab31e5894966e2230d248.png]]
+[[file:./.ob-jupyter/61385f4a6d868117117de917269c2916e95fb89c.png]]
+[[file:./.ob-jupyter/1f1d9a2c78d48eff088bed7d671ea29ff7a601bb.png]]
+[[file:./.ob-jupyter/bb61476fb8239956c063a0eda63f7911b0b3d4f7.png]]
+:END:
+* Posterior correlation of coefficients
+#+begin_src jupyter-python
+coef_dec = True
+runs = mcmc_runs.query(f'dataset == "small" & coef_dec == "{coef_dec}"')
+assert runs.shape[0] == 1, runs.shape[0]
+small_trainer = mcmc_trainers[runs.iloc[0]['name']]
+runs = mcmc_runs.query(f'dataset == "large" & coef_dec == "{coef_dec}"')
+assert runs.shape[0] == 1, runs.shape[0]
+large_trainer = mcmc_trainers[runs.iloc[0]['name']]
+#+end_src
+
+#+RESULTS:
+
+#+begin_src jupyter-python
+fig, axs = plt.subplots(ncols=2, figsize=(12, 5))
+for ds, trainer, ax in zip(['small', 'large'], [small_trainer, large_trainer], axs):
+    samples = trainer.samples['coef']
+    sns.heatmap(np.corrcoef(samples.T), vmin=-1., vmax=1., cmap='vlag', ax=ax)
+    ax.set(title=ds)
+None
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/2799f87214bfae7eaad0745cb8956ff442ccae8a.png]]
+
+#+begin_src jupyter-python
+plt.scatter(small_trainer.samples['coef'][:, 0],
+            small_trainer.samples['coef'][:, 1])
+None
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/829e46295b8863b82d54df036271488911096206.png]]

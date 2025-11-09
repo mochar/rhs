@@ -9,6 +9,7 @@
 %autoreload 2
 
 import functools
+from pprint import pprint
 
 import jax
 from jax import random
@@ -29,8 +30,6 @@ jax.config.update('jax_platform_name', 'cpu')
 #+end_src
 
 #+RESULTS: preamble
-:RESULTS:
-:END:
 #+RESULTS:
 * Prior
 
@@ -416,49 +415,100 @@ print('Conditional:', marg_lp + cond_lp)
 : Conditional: [0.94605076 2.090853   3.5045884  3.5911913  2.237096   3.4550557 ]
 
 * Paired cond correlated
+#+CALL: preamble()
+
+#+RESULTS:
+
+** Dataset
 #+begin_src jupyter-python
-dataset = rhs.datasets.TestDataset(D_per=10, B_k=np.array([6., 6., 6.]))
+dataset = rhs.datasets.TestDataset(
+    D_per=30, B_k=np.array([3., 3., 3.]),
+    correlated=.8,
+    x_std=.5, group_std=1.)
+
+# dataset = rhs.datasets.TestDataset(
+    # D_per=2, B_k=np.array([3.]),
+    # correlated=.8,
+    # x_std=.1, group_std=1.)
+
+sns.heatmap(dataset.X, center=0)
+None
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/298f46374c1cbacc29fce8581619db967e28f801.png]]
+
+** Model and train
+#+begin_src jupyter-python
 conf = rhs.Configuration(dataset.X, dataset.Y,
                          # None,
                          # rhs.ReparamIG(True),
-                         rhs.ReparamII(False, True),
-                         # structure=rhs.GuideUnstructured(),
-                         structure=rhs.GuidePairCond(),
-                         # structure=rhs.GuidePairCondCorr(5),
+                         # rhs.ReparamII(False, True),
+                         reparam_tau=rhs.ReparamIG(True),
+                         reparam_lambda=rhs.ReparamIG(True),
+                         
+                         structure=rhs.GuideUnstructured(),
+                         # structure=rhs.GuidePairMv(),
+                         # structure=rhs.GuidePairCond(),
+                         # structure=rhs.GuidePairCondCorr(3),
+                         # structure=rhs.GuidePairCondCorr(),
+                         # structure=rhs.GuideFullMatrix(),
+                         
                          coef_dec=True,
-                         tau_scale=dataset.tau_scale, c_df=3., c_scale=30.)
+                         # coef_dec=False,
+                         noise_scale=1.,
+
+                         tau_scale=dataset.tau_scale, 
+                         # tau_scale=0.1,
+                         # c_df=1., c_scale=30.)
+                         c_df=3., c_scale=3.)
 if isinstance(conf.structure, rhs.GuidePairCondCorr) and conf.structure.low_rank_factor:
-    conf.inits['coef_factor'] = HalfNormal(.001).sample(random.key(0), (conf.D, conf.structure.low_rank_factor))
-# trainer = rhs.TrainerSVI(conf, optim=optax.adam(0.01), elbo=numpyro.infer.Trace_ELBO(10))
-trainer = rhs.TrainerSVI(conf, optim=optax.adam(0.01), elbo=numpyro.infer.TraceMeanField_ELBO(10))
+    # s = 0.001
+    s = 0.1
+    conf.inits['coef_factor'] = HalfNormal(s).sample(random.key(0), (conf.D, conf.structure.low_rank_factor))
+
+# conf.inits['locs.noise'] = -3.
+# for p, init in conf.inits.items():
+    # if p.startswith('locs.tau'):
+        # conf.inits[p] = jnp.full_like(init, -3.)
+
+# elbo = numpyro.infer.Trace_ELBO
+elbo = numpyro.infer.TraceMeanField_ELBO
+elbo = functools.partial(rhs.TrainerSVI.build_specialized_elbo, conf)
+
+trainer = rhs.TrainerSVI(
+    conf,
+    optim=optax.adam(0.01),
+    elbo=elbo(num_particles=10))
 #+end_src
 
 #+RESULTS:
 
-** Train
-#+header: :var iters=(* 1000 3)
+*** Train
+#+header: :var iters=(* 1000 3 3)
 #+begin_src jupyter-python
 trainer.train(iters)
+plt.figure(figsize=(5,4))
 plt.plot(trainer.losses)
 plt.suptitle(trainer.losses[-1])
 None
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/49c2f664acb3a346ca3b168022caa6aaedbf3689.png]]
+[[file:./.ob-jupyter/b66004c3f6d47e4d75c294a8a26f8e6ecc156d95.png]]
 
 alsjd
 
 #+begin_src jupyter-python
-dataset.plot_coeffs(trainer)
+dataset.plot_coeffs(trainer, True)
 #+end_src
 
 #+RESULTS:
-[[file:./.ob-jupyter/13853e5fad519c21a5bdba2312a2c09496d0eb0b.png]]
+[[file:./.ob-jupyter/9c43b8abd568254e0b8030d394696d6a4c4ef086.png]]
 
 lsjadskj
 
-#+header: :var v=.3
+#+header: :var v=.1
 #+begin_src jupyter-python
 if isinstance(conf.structure, rhs.GuidePairCondCorr):
     if conf.structure.low_rank_factor is None:
@@ -472,3 +522,265 @@ if isinstance(conf.structure, rhs.GuidePairCondCorr):
 None
 #+end_src
 #+RESULTS:
+
+** Lambda
+#+header: :var sharex="col" sharex='False threshold=5. 
+#+begin_src jupyter-python :eval no
+sites = ['lambda_aux1_dec', 'lambda_aux1', 'lambda_aux2_dec', 'lambda_aux2', 'lambda', 'coef_dec', 'coef']
+fig, axs = plt.subplots(
+    nrows=dataset.K, ncols=len(sites), sharex=sharex,
+    figsize=(3*len(sites),3*dataset.K),
+    gridspec_kw=dict(wspace=0.2, hspace=0.2))
+
+s = trainer.sample_posterior()
+
+for k in range(dataset.K):
+    m = trainer.posterior('lambda').mode
+    m = m[k*dataset.D_per:(k+1)*dataset.D_per]
+    ind = m.argmax() + k*dataset.D_per
+    
+    for j, site in enumerate(sites):
+        ax = axs[k, j]
+        ax.set_yticks([], [])
+        if k == 0:
+            ax.set(title=site)
+        try:
+            d = trainer.posterior(site)
+            d = d.__class__(d.loc[ind], d.scale[ind])
+        except:
+            ax.set_xticks([], [])
+            continue
+    
+        alpha = 1.  
+        if (site.endswith('aux1') and getattr(trainer.conf.reparam, 'dec1', False)) or \
+           (site.endswith('aux2') and (getattr(trainer.conf.reparam, 'dec2', False) or getattr(trainer.conf.reparam, 'dec', False))) or \
+           (site == 'lambda' and trainer.conf.reparam) or \
+           (site == 'coef'):
+            alpha = 0.5
+    
+        x = jnp.linspace(d.icdf(.01), d.icdf(.99), 300)
+        ss = s[site][:, ind]
+        ax.hist(ss, bins=30, alpha=alpha)
+        ax.axvline(ss.mean(), ls='--', alpha=alpha)
+        ax.text(1.0, .7, f'{ss.mean():.4f}',
+                transform=ax.transAxes,
+                ha='right', va='top')
+    
+        axt = ax.twinx()
+        axt.margins(0.)
+        axt.yaxis.set_visible(False)
+        axt.plot(x, jnp.exp(d.log_prob(x)), c='deeppink', alpha=alpha)
+        axt.axvline(d.mean, ls='--', c='deeppink', alpha=alpha)
+        ax.text(1.0, .9, f'{d.mean:.4f}',
+                transform=ax.transAxes,
+                ha='right', va='top', c='deeppink')
+    
+        if site == 'a':
+            ax.axvline(TRUE.scale, lw=2, c='k')
+        if site == 'coef':
+            ax.axvline(dataset.B_k_std[k], lw=2, c='k')
+    
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/3cb964adfa140986174bf7ff33ba988e9e155e79.png]]
+
+
+* Dependency structures
+** Model
+#+begin_src jupyter-python
+from numpyro.infer.inspect import get_dependencies
+
+conf = rhs.Configuration(jnp.zeros((2,2)), jnp.zeros(2), None, rhs.GuideUnstructured(), False, .1, 1., 1.)
+dependencies = get_dependencies(conf.model)
+pprint(dependencies)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+{'posterior_dependencies': {'c2_aux': {'c2_aux': set(),
+                                       'coef': set(),
+                                       'lambda': set(),
+                                       'tau': set()},
+                            'coef': {'coef': {'d'}, 'y': set()},
+                            'lambda': {'coef': set(), 'lambda': set()},
+                            'noise': {'coef': set(),
+                                      'noise': set(),
+                                      'y': set()},
+                            'tau': {'coef': set(),
+                                    'lambda': set(),
+                                    'tau': set()}},
+ 'prior_dependencies': {'c2_aux': {'c2_aux': set()},
+                        'coef': {'c2_aux': set(),
+                                 'coef': set(),
+                                 'lambda': set(),
+                                 'tau': set()},
+                        'lambda': {'lambda': set()},
+                        'noise': {'noise': set()},
+                        'tau': {'tau': set()},
+                        'y': {'coef': set(), 'noise': set(), 'y': set()}}}
+#+end_example
+
+** Guide
+#+begin_src jupyter-python
+from numpyro.infer.inspect import get_model_relations, get_dependencies
+
+guide_structures = [rhs.GuideUnstructured(), rhs.GuidePairMv(), rhs.GuidePairCond(), rhs.GuidePairCondCorr(), rhs.GuidePairCondCorr(3)]#, rhs.GuideFullMatrix()]
+for structure in guide_structures:
+    conf = rhs.Configuration(jnp.zeros((2,2)), jnp.zeros(2), None, structure, False, .1, 1., 1.)
+    dependencies = get_dependencies(conf.guide)
+    print('='*3, structure, '='*3)
+    print('Prior:')
+    pprint(dependencies['prior_dependencies'], indent=4)
+    print('Posterior:')
+    pprint(dependencies['posterior_dependencies'], indent=4)
+    print('\n\n')
+#+end_src
+
+#+RESULTS:
+#+begin_example
+=== GuideUnstructured() ===
+Prior:
+{   'c2_aux': {'c2_aux': set()},
+    'coef': {'coef': set()},
+    'lambda': {'lambda': set()},
+    'noise': {'noise': set()},
+    'tau': {'tau': set()}}
+Posterior:
+{   'c2_aux': {'c2_aux': set()},
+    'coef': {'coef': set()},
+    'lambda': {'lambda': set()},
+    'noise': {'noise': set()},
+    'tau': {'tau': set()}}
+
+
+
+=== GuidePairMv() ===
+Prior:
+{   'c2_aux': {'c2_aux': set()},
+    'loglambda_coef': {'loglambda_coef': set()},
+    'noise': {'noise': set()},
+    'tau': {'tau': set()}}
+Posterior:
+{   'c2_aux': {'c2_aux': set()},
+    'loglambda_coef': {'loglambda_coef': set()},
+    'noise': {'noise': set()},
+    'tau': {'tau': set()}}
+
+
+
+=== GuidePairCond() ===
+Prior:
+{   'c2_aux': {'c2_aux': set()},
+    'coef': {'coef': set(), 'lambda': set()},
+    'lambda': {'lambda': set()},
+    'noise': {'noise': set()},
+    'tau': {'tau': set()}}
+Posterior:
+{   'c2_aux': {'c2_aux': set()},
+    'coef': {'coef': set()},
+    'lambda': {'coef': set(), 'lambda': set()},
+    'noise': {'noise': set()},
+    'tau': {'tau': set()}}
+
+
+
+=== GuidePairCondCorr(low_rank_factor=None) ===
+Prior:
+{   'c2_aux': {'c2_aux': set()},
+    'coef_joint': {'coef_joint': set(), 'lambda': set()},
+    'lambda': {'lambda': set()},
+    'noise': {'noise': set()},
+    'tau': {'tau': set()}}
+Posterior:
+{   'c2_aux': {'c2_aux': set()},
+    'coef_joint': {'coef_joint': set()},
+    'lambda': {'coef_joint': set(), 'lambda': {'d'}},
+    'noise': {'noise': set()},
+    'tau': {'tau': set()}}
+
+
+
+=== GuidePairCondCorr(low_rank_factor=3) ===
+Prior:
+{   'c2_aux': {'c2_aux': set()},
+    'coef_joint': {'coef_joint': set(), 'lambda': set()},
+    'lambda': {'lambda': set()},
+    'noise': {'noise': set()},
+    'tau': {'tau': set()}}
+Posterior:
+{   'c2_aux': {'c2_aux': set()},
+    'coef_joint': {'coef_joint': set()},
+    'lambda': {'coef_joint': set(), 'lambda': {'d'}},
+    'noise': {'noise': set()},
+    'tau': {'tau': set()}}
+#+end_example
+
+* Simplified
++ Only one group with two features
++ Better see the multimodal posterior
+
+** Dataset
+#+begin_src jupyter-python
+dataset = rhs.datasets.TestDataset(
+    D_per=2, B_k=np.array([3.]),
+    correlated=.8,
+    x_std=.1, group_std=1.)
+
+sns.heatmap(dataset.X, center=0)
+None
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/f0aa544ebeb9cf1a102bcef094de809b77b60a21.png]]
+
+** MCMC
+#+begin_src jupyter-python
+conf = rhs.Configuration(dataset.X, dataset.Y,
+                         # None,
+                         # rhs.ReparamIG(True),
+                         # rhs.ReparamII(False, True),
+                         reparam_tau=rhs.ReparamII(True, True),
+                         reparam_lambda=rhs.ReparamII(True, True),
+                         structure=rhs.GuideUnstructured(),
+                         coef_dec=True,
+                         noise_scale=1.,
+                         tau_scale=dataset.tau_scale, 
+                         c_df=3., c_scale=30.)
+# trainer = rhs.TrainerMCMC(conf, num_warmup=1000, num_samples=1000)
+trainer = rhs.TrainerMCMC(conf, num_warmup=1000, num_samples=1000)
+trainer.train()
+print('Diverging:', trainer.diverging.sum())
+#+end_src
+
+#+RESULTS:
+: sample: 100%|███████| 2000/2000 [00:03<00:00, 629.98it/s, 127 steps of size 2.29e-02. acc. prob=0.90]Diverging: 26
+:
+
+Colinearity between the two coefficients.
+#+begin_src jupyter-python
+plt.scatter(*trainer.samples['coef'].T)
+plt.scatter(*trainer.samples['coef'][trainer.diverging].T, c='red')
+plt.axhline(dataset.B_k_std, c='red')
+plt.axvline(dataset.B_k_std, c='red')
+None
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/666b3aae0e4abaa5e109e93a1cd12bd6001b6842.png]]
+
+Correlation between lambda and coefficient.
+#+begin_src jupyter-python
+fig, axs = plt.subplots(ncols=2, figsize=(8,3), sharex=True, sharey=True)
+for i, ax in enumerate(axs):
+    for diverging in [False, True]:
+        sub = trainer.diverging ^ (not diverging)
+        ax.scatter(trainer.samples['lambda'][sub, i],
+                   trainer.samples['coef_dec'][sub, i],
+                   c='red' if diverging else 'steelblue')
+    ax.set(xlabel='Lambda', ylabel='Coef')
+None
+#+end_src
+
+#+RESULTS:
+[[file:./.ob-jupyter/1d2514bf2eac974530fcc573b229a3414e400b42.png]]
